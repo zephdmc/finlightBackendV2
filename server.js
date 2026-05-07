@@ -17,7 +17,6 @@ const startServer = async () => {
     
     const server = app.listen(PORT, () => {
       console.log(`🚀 Server running on port ${PORT}`);
-      console.log(`🔗 URL: http://localhost:${PORT}`);
       console.log(`🌍 Environment: ${NODE_ENV}`);
       console.log(`🛡️  Security Headers: Enabled`);
       console.log(`⏱️  Rate Limiting: Enabled`);

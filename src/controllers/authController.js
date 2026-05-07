@@ -189,7 +189,8 @@ exports.checkMemberLimit = async (req, res, next) => {
 // @route   POST /api/auth/login
 // @access  Public
 exports.login = async (req, res, next) => {
-    try {
+  try {
+    console.log("Email:", res);
       const errors = validationResult(req);
       if (!errors.isEmpty()) {
         return res.status(400).json({ errors: errors.array() });
