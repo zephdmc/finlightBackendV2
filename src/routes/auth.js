@@ -41,8 +41,7 @@ router.post(
   authController.login
 );
 
-router.post('/signup', authController);
-
+router.post('/signup', authController.signupWithOrg);
 /**
  * @route   GET /api/auth/me
  * @desc    Get current logged in user
