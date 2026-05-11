@@ -15,7 +15,7 @@ const startServer = async () => {
     // Connect to database using your database config
     await database.connect();
     
-    const server = app.listen(PORT, () => {
+    const server = app.listen(PORT,'0.0.0.0',  () => {
       console.log(`🚀 Server running on port ${PORT}`);
       console.log(`🌍 Environment: ${NODE_ENV}`);
       console.log(`🛡️  Security Headers: Enabled`);
