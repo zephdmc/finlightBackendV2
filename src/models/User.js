@@ -23,14 +23,26 @@ const userSchema = new mongoose.Schema({
   },
   role: {
     type: String,
-    enum: ['admin', 'member'],
+    enum: [ 'super_admin','admin', 'member'],
     default: 'member'
+  },
+  organizationId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Organization',
+    required: [true, 'Organization ID is required']
   },
   createdAt: {
     type: Date,
     default: Date.now
   }
 });
+
+// Compound index for unique email per organization (optional but recommended)
+// Because email might be same across different orgs (e.g., john@doe.com in Org A and Org B)
+userSchema.index({ email: 1, organizationId: 1 }, { unique: true });
+
+// Index for faster tenant-based queries
+userSchema.index({ organizationId: 1 });
 
 // Hash password before saving
 userSchema.pre('save', async function(next) {

@@ -3,15 +3,16 @@ const mongoose = require('mongoose');
 /**
  * Payment Type Schema
  * Defines different types of payments that can be created (dues, wedding dues, charity, etc.)
+ * Now supports multi-tenant: each organization has its own set of payment types.
  */
 const PaymentTypeSchema = new mongoose.Schema({
   name: {
     type: String,
     required: [true, 'Payment type name is required'],
-    unique: true,
     trim: true,
     minlength: [2, 'Name must be at least 2 characters long'],
     maxlength: [100, 'Name cannot exceed 100 characters']
+    // Note: unique constraint is now handled by compound index with organizationId
   },
   type: {
     type: String,
@@ -83,6 +84,11 @@ const PaymentTypeSchema = new mongoose.Schema({
     default: true,
     description: 'Whether this payment type is active and available for use'
   },
+  organizationId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Organization',
+    required: [true, 'Organization ID is required']
+  },
   createdBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
@@ -99,40 +105,45 @@ const PaymentTypeSchema = new mongoose.Schema({
   toObject: { virtuals: true }
 });
 
-// Indexes for better query performance
-PaymentTypeSchema.index({ name: 1 });
-PaymentTypeSchema.index({ type: 1 });
-PaymentTypeSchema.index({ is_mandatory: 1 });
-PaymentTypeSchema.index({ frequency: 1 });
-PaymentTypeSchema.index({ isActive: 1 });
-PaymentTypeSchema.index({ createdAt: -1 });
-PaymentTypeSchema.index({ is_mandatory: 1, isActive: 1 });
-PaymentTypeSchema.index({ frequency: 1, isActive: 1 });
+// ============= INDEXES FOR MULTI-TENANCY =============
+// Unique compound index: same payment type name cannot exist twice within one organization
+PaymentTypeSchema.index({ organizationId: 1, name: 1 }, { unique: true });
+
+// Primary tenant filter index (most queries)
+PaymentTypeSchema.index({ organizationId: 1, createdAt: -1 });
+
+// Common query filters per organization
+PaymentTypeSchema.index({ organizationId: 1, type: 1 });
+PaymentTypeSchema.index({ organizationId: 1, is_mandatory: 1 });
+PaymentTypeSchema.index({ organizationId: 1, frequency: 1 });
+PaymentTypeSchema.index({ organizationId: 1, isActive: 1 });
+
+// Composite indexes for combined filters
+PaymentTypeSchema.index({ organizationId: 1, is_mandatory: 1, isActive: 1 });
+PaymentTypeSchema.index({ organizationId: 1, frequency: 1, isActive: 1 });
 
 // ============= VIRTUAL FIELDS WITH SAFETY CHECKS =============
 
-// Virtual for formatted amount - FIXED: Add safety check
+// Virtual for formatted amount
 PaymentTypeSchema.virtual('formattedAmount').get(function() {
-  // Safety check for missing amount
   if (this.amount === undefined || this.amount === null) {
     return '₦0';
   }
   return `₦${this.amount.toLocaleString()}`;
 });
 
-// Virtual for schedule text - FIXED: Add safety check for duration fields
+// Virtual for schedule text
 PaymentTypeSchema.virtual('scheduleText').get(function() {
   if (this.frequency === 'one-time') {
     return 'One-time payment';
   }
-  // Safety check for missing duration fields
   if (!this.duration_value || !this.duration_unit) {
     return 'Recurring payment';
   }
   return `Every ${this.duration_value} ${this.duration_unit}`;
 });
 
-// Virtual for frequency label - FIXED: Add safety check
+// Virtual for frequency label
 PaymentTypeSchema.virtual('frequencyLabel').get(function() {
   if (!this.frequency) {
     return 'One Time';
@@ -146,7 +157,7 @@ PaymentTypeSchema.virtual('frequencyLabel').get(function() {
   return labels[this.frequency] || this.frequency;
 });
 
-// Virtual for status label - FIXED: Add safety check
+// Virtual for status label
 PaymentTypeSchema.virtual('statusLabel').get(function() {
   if (this.isActive === undefined || this.isActive === null) {
     return 'Active';
@@ -154,7 +165,7 @@ PaymentTypeSchema.virtual('statusLabel').get(function() {
   return this.isActive ? 'Active' : 'Inactive';
 });
 
-// Virtual for type label (mandatory/optional) - FIXED: Add safety check
+// Virtual for type label (mandatory/optional)
 PaymentTypeSchema.virtual('typeLabel').get(function() {
   if (this.is_mandatory === undefined || this.is_mandatory === null) {
     return 'Optional';
@@ -162,7 +173,7 @@ PaymentTypeSchema.virtual('typeLabel').get(function() {
   return this.is_mandatory ? 'Mandatory' : 'Optional';
 });
 
-// Virtual for type color - FIXED: Add safety check
+// Virtual for type color
 PaymentTypeSchema.virtual('typeColor').get(function() {
   if (this.is_mandatory === undefined || this.is_mandatory === null) {
     return 'green';
@@ -170,7 +181,7 @@ PaymentTypeSchema.virtual('typeColor').get(function() {
   return this.is_mandatory ? 'red' : 'green';
 });
 
-// Virtual for category label - FIXED: Add safety check
+// Virtual for category label
 PaymentTypeSchema.virtual('categoryLabel').get(function() {
   if (!this.type) {
     return 'Dues';
@@ -186,19 +197,15 @@ PaymentTypeSchema.virtual('categoryLabel').get(function() {
   return labels[this.type] || this.type || 'Dues';
 });
 
-// Method to calculate next due date based on frequency
+// ============= INSTANCE METHODS =============
 PaymentTypeSchema.methods.calculateNextDueDate = function(startDate = new Date()) {
   if (this.frequency === 'one-time') {
     return null;
   }
-  
-  // Safety check for missing duration fields
   if (!this.duration_value || !this.duration_unit) {
     return null;
   }
-  
   const date = new Date(startDate);
-  
   switch(this.duration_unit) {
     case 'days':
       date.setDate(date.getDate() + this.duration_value);
@@ -215,79 +222,63 @@ PaymentTypeSchema.methods.calculateNextDueDate = function(startDate = new Date()
     default:
       return null;
   }
-  
   return date;
 };
 
-// Method to check if payment type is valid for use
 PaymentTypeSchema.methods.isValid = function() {
   if (!this.isActive) return false;
   if (!this.name) return false;
   if (!this.type) return false;
   if (!this.amount || this.amount <= 0) return false;
-  
   if (this.frequency !== 'one-time') {
     if (!this.duration_value || !this.duration_unit) return false;
   }
-  
   return true;
 };
 
-// Static method to get active payment types
-PaymentTypeSchema.statics.getActiveTypes = function() {
-  return this.find({ isActive: true }).sort({ createdAt: -1 });
+// ============= STATIC METHODS (SCOPED BY ORGANIZATION) =============
+PaymentTypeSchema.statics.getActiveTypes = function(organizationId) {
+  return this.find({ organizationId, isActive: true }).sort({ createdAt: -1 });
 };
 
-// Static method to get mandatory payment types
-PaymentTypeSchema.statics.getMandatoryTypes = function() {
-  return this.find({ is_mandatory: true, isActive: true }).sort({ createdAt: -1 });
+PaymentTypeSchema.statics.getMandatoryTypes = function(organizationId) {
+  return this.find({ organizationId, is_mandatory: true, isActive: true }).sort({ createdAt: -1 });
 };
 
-// Static method to get optional payment types
-PaymentTypeSchema.statics.getOptionalTypes = function() {
-  return this.find({ is_mandatory: false, isActive: true }).sort({ createdAt: -1 });
+PaymentTypeSchema.statics.getOptionalTypes = function(organizationId) {
+  return this.find({ organizationId, is_mandatory: false, isActive: true }).sort({ createdAt: -1 });
 };
 
-// Static method to get types by frequency
-PaymentTypeSchema.statics.getByFrequency = function(frequency) {
-  return this.find({ frequency, isActive: true }).sort({ createdAt: -1 });
+PaymentTypeSchema.statics.getByFrequency = function(organizationId, frequency) {
+  return this.find({ organizationId, frequency, isActive: true }).sort({ createdAt: -1 });
 };
 
-// Static method to get types by category
-PaymentTypeSchema.statics.getByCategory = function(category) {
-  return this.find({ type: category, isActive: true }).sort({ createdAt: -1 });
+PaymentTypeSchema.statics.getByCategory = function(organizationId, category) {
+  return this.find({ organizationId, type: category, isActive: true }).sort({ createdAt: -1 });
 };
 
-// Pre-save middleware
+// ============= MIDDLEWARE =============
 PaymentTypeSchema.pre('save', function(next) {
-  // Ensure duration fields are present for recurring payments
   if (this.frequency !== 'one-time') {
     if (!this.duration_value || !this.duration_unit) {
       next(new Error('Duration value and unit are required for recurring payments'));
     }
   }
-  
-  // Clean up description if empty
   if (this.description === '') {
     this.description = undefined;
   }
-  
-  // Ensure type has a default if not provided
   if (!this.type) {
     this.type = 'dues';
   }
-  
   next();
 });
 
-// Post-save middleware
 PaymentTypeSchema.post('save', function(doc) {
-  console.log(`Payment type created/updated: ${doc.name} (Category: ${doc.type})`);
+  console.log(`Payment type created/updated: ${doc.name} (Org: ${doc.organizationId}, Category: ${doc.type})`);
 });
 
-// Post-remove middleware
 PaymentTypeSchema.post('remove', function(doc) {
-  console.log(`Payment type removed: ${doc.name}`);
+  console.log(`Payment type removed: ${doc.name} from organization ${doc.organizationId}`);
 });
 
 module.exports = mongoose.model('PaymentType', PaymentTypeSchema);

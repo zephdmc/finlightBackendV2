@@ -4,7 +4,6 @@ const userController = require('../controllers/userController');
 const { protect } = require('../middleware/auth');
 const roleCheck = require('../middleware/roleCheck');
 const ValidationMiddleware = require('../middleware/validation');
-
 // Import body for custom validation rules
 const { body } = require('express-validator');
 

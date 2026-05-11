@@ -1,3 +1,4 @@
+// backend/src/controllers/TransactionController.js
 const Income = require('../models/Income');
 const Expenditure = require('../models/Expenditure');
 const Payment = require('../models/Payment');
@@ -5,17 +6,26 @@ const Payment = require('../models/Payment');
 /**
  * Transaction Controller - Handles income and expenditure operations
  * Manages all financial transactions in the system
+ * Now fully multi‑tenant: all operations are scoped to the authenticated user's organization.
  */
 class TransactionController {
   /**
-   * Record new income
+   * Get organizationId from authenticated user
+   */
+  getOrgId(req) {
+    return req.user.organizationId;
+  }
+
+  /**
+   * Record new income (scoped to organization)
    * @route POST /api/transactions/income
    * @access Private/Admin
    */
   async recordIncome(req, res, next) {
     try {
+      const organizationId = this.getOrgId(req);
       const { amount, source, description } = req.body;
-      
+
       // Validate amount
       if (!amount || amount <= 0) {
         return res.status(400).json({
@@ -37,6 +47,7 @@ class TransactionController {
         source,
         description: description || '',
         createdBy: req.user.id,
+        organizationId,                     // 🆕 multi‑tenant
         date: new Date(),
         type: 'manual'
       });
@@ -52,14 +63,15 @@ class TransactionController {
   }
 
   /**
-   * Record new expenditure
+   * Record new expenditure (scoped to organization)
    * @route POST /api/transactions/expenditure
    * @access Private/Admin
    */
   async recordExpenditure(req, res, next) {
     try {
+      const organizationId = this.getOrgId(req);
       const { amount, purpose, description, receipt } = req.body;
-      
+
       // Validate amount
       if (!amount || amount <= 0) {
         return res.status(400).json({
@@ -76,17 +88,19 @@ class TransactionController {
         });
       }
 
-      // Check if sufficient balance exists
+      // Check if sufficient balance exists (scoped to organization)
       const totalIncome = await Income.aggregate([
+        { $match: { organizationId: new mongoose.Types.ObjectId(organizationId) } },
         { $group: { _id: null, total: { $sum: '$amount' } } }
       ]);
-      
+
       const totalExpenditure = await Expenditure.aggregate([
+        { $match: { organizationId: new mongoose.Types.ObjectId(organizationId) } },
         { $group: { _id: null, total: { $sum: '$amount' } } }
       ]);
 
       const balance = (totalIncome[0]?.total || 0) - (totalExpenditure[0]?.total || 0);
-      
+
       if (balance < amount) {
         return res.status(400).json({
           success: false,
@@ -101,6 +115,7 @@ class TransactionController {
         description: description || '',
         receipt: receipt || null,
         createdBy: req.user.id,
+        organizationId,                     // 🆕 multi‑tenant
         date: new Date()
       });
 
@@ -116,11 +131,12 @@ class TransactionController {
 
   /**
    * Auto-record payment as income (called when payment is successful)
+   * Now requires organizationId
    */
   async recordIncomeFromPayment(paymentData) {
     try {
-      const { paymentId, amount, type, userId, paymentTypeId, description } = paymentData;
-      
+      const { paymentId, amount, type, userId, paymentTypeId, description, organizationId } = paymentData;
+
       const income = await Income.create({
         amount,
         source: `Member Payment: ${type.toUpperCase()}`,
@@ -129,10 +145,11 @@ class TransactionController {
         userId,
         paymentTypeId,
         createdBy: userId,
+        organizationId,                     // 🆕 required
         date: new Date(),
         type: 'payment'
       });
-      
+
       return income;
     } catch (error) {
       console.error('Error recording income from payment:', error);
@@ -141,23 +158,26 @@ class TransactionController {
   }
 
   /**
-   * Get total income (including payments)
+   * Get total income (including payments) – scoped to organization
    * @route GET /api/transactions/total-income
    * @access Private/Admin
    */
   async getTotalIncome(req, res, next) {
     try {
+      const organizationId = this.getOrgId(req);
+      const orgObjectId = new mongoose.Types.ObjectId(organizationId);
+
       const [manualIncome, paymentIncome, paymentsTotal] = await Promise.all([
         Income.aggregate([
-          { $match: { type: 'manual' } },
+          { $match: { type: 'manual', organizationId: orgObjectId } },
           { $group: { _id: null, total: { $sum: '$amount' } } }
         ]),
         Income.aggregate([
-          { $match: { type: 'payment' } },
+          { $match: { type: 'payment', organizationId: orgObjectId } },
           { $group: { _id: null, total: { $sum: '$amount' } } }
         ]),
         Payment.aggregate([
-          { $match: { status: 'paid' } },
+          { $match: { status: 'paid', organizationId: orgObjectId } },
           { $group: { _id: null, total: { $sum: '$amount' } } }
         ])
       ]);
@@ -182,34 +202,35 @@ class TransactionController {
   }
 
   /**
-   * Get all incomes with filters
+   * Get all incomes with filters (scoped to organization)
    * @route GET /api/transactions/income
    * @access Private/Admin
    */
   async getAllIncomes(req, res, next) {
     try {
+      const organizationId = this.getOrgId(req);
       const { startDate, endDate, source, type, page = 1, limit = 20 } = req.query;
-      
-      const query = {};
-      
+
+      const query = { organizationId };
+
       if (startDate && endDate) {
         query.date = {
           $gte: new Date(startDate),
           $lte: new Date(endDate)
         };
       }
-      
+
       if (source) {
         query.source = { $regex: source, $options: 'i' };
       }
-      
+
       if (type && type !== 'all') {
         query.type = type;
       }
 
       const skip = (parseInt(page) - 1) * parseInt(limit);
       const limitNum = parseInt(limit);
-      
+
       const [incomes, total, totalAmount] = await Promise.all([
         Income.find(query)
           .populate('createdBy', 'name email')
@@ -250,30 +271,31 @@ class TransactionController {
   }
 
   /**
-   * Get all expenditures with filters
+   * Get all expenditures with filters (scoped to organization)
    * @route GET /api/transactions/expenditure
    * @access Private/Admin
    */
   async getAllExpenditures(req, res, next) {
     try {
+      const organizationId = this.getOrgId(req);
       const { startDate, endDate, purpose, page = 1, limit = 20 } = req.query;
-      
-      const query = {};
-      
+
+      const query = { organizationId };
+
       if (startDate && endDate) {
         query.date = {
           $gte: new Date(startDate),
           $lte: new Date(endDate)
         };
       }
-      
+
       if (purpose) {
         query.purpose = { $regex: purpose, $options: 'i' };
       }
 
       const skip = (parseInt(page) - 1) * parseInt(limit);
       const limitNum = parseInt(limit);
-      
+
       const [expenditures, total, totalAmount] = await Promise.all([
         Expenditure.find(query)
           .populate('createdBy', 'name email')
@@ -309,16 +331,20 @@ class TransactionController {
   }
 
   /**
-   * Get single income record
+   * Get single income record (scoped)
    * @route GET /api/transactions/income/:id
    * @access Private/Admin
    */
   async getIncomeById(req, res, next) {
     try {
-      const income = await Income.findById(req.params.id)
+      const organizationId = this.getOrgId(req);
+      const income = await Income.findOne({
+        _id: req.params.id,
+        organizationId
+      })
         .populate('createdBy', 'name email')
         .populate('userId', 'name email');
-      
+
       if (!income) {
         return res.status(404).json({
           success: false,
@@ -336,15 +362,18 @@ class TransactionController {
   }
 
   /**
-   * Get single expenditure record
+   * Get single expenditure record (scoped)
    * @route GET /api/transactions/expenditure/:id
    * @access Private/Admin
    */
   async getExpenditureById(req, res, next) {
     try {
-      const expenditure = await Expenditure.findById(req.params.id)
-        .populate('createdBy', 'name email');
-      
+      const organizationId = this.getOrgId(req);
+      const expenditure = await Expenditure.findOne({
+        _id: req.params.id,
+        organizationId
+      }).populate('createdBy', 'name email');
+
       if (!expenditure) {
         return res.status(404).json({
           success: false,
@@ -362,16 +391,20 @@ class TransactionController {
   }
 
   /**
-   * Update income record
+   * Update income record (scoped)
    * @route PUT /api/transactions/income/:id
    * @access Private/Admin
    */
   async updateIncome(req, res, next) {
     try {
+      const organizationId = this.getOrgId(req);
       const { amount, source, description } = req.body;
-      
-      const income = await Income.findById(req.params.id);
-      
+
+      const income = await Income.findOne({
+        _id: req.params.id,
+        organizationId
+      });
+
       if (!income) {
         return res.status(404).json({
           success: false,
@@ -396,7 +429,7 @@ class TransactionController {
         }
         income.amount = amount;
       }
-      
+
       if (source !== undefined) {
         if (source.trim() === '') {
           return res.status(400).json({
@@ -406,11 +439,11 @@ class TransactionController {
         }
         income.source = source;
       }
-      
+
       if (description !== undefined) {
         income.description = description;
       }
-      
+
       income.updatedBy = req.user.id;
       await income.save();
 
@@ -425,16 +458,20 @@ class TransactionController {
   }
 
   /**
-   * Update expenditure record
+   * Update expenditure record (scoped)
    * @route PUT /api/transactions/expenditure/:id
    * @access Private/Admin
    */
   async updateExpenditure(req, res, next) {
     try {
+      const organizationId = this.getOrgId(req);
       const { amount, purpose, description, receipt } = req.body;
-      
-      const expenditure = await Expenditure.findById(req.params.id);
-      
+
+      const expenditure = await Expenditure.findOne({
+        _id: req.params.id,
+        organizationId
+      });
+
       if (!expenditure) {
         return res.status(404).json({
           success: false,
@@ -449,17 +486,19 @@ class TransactionController {
             message: 'Amount must be greater than 0'
           });
         }
-        
+
         if (amount > expenditure.amount) {
           const difference = amount - expenditure.amount;
           const totalIncome = await Income.aggregate([
+            { $match: { organizationId: new mongoose.Types.ObjectId(organizationId) } },
             { $group: { _id: null, total: { $sum: '$amount' } } }
           ]);
           const totalExpenditure = await Expenditure.aggregate([
+            { $match: { organizationId: new mongoose.Types.ObjectId(organizationId) } },
             { $group: { _id: null, total: { $sum: '$amount' } } }
           ]);
           const currentBalance = (totalIncome[0]?.total || 0) - (totalExpenditure[0]?.total || 0);
-          
+
           if (currentBalance < difference) {
             return res.status(400).json({
               success: false,
@@ -467,10 +506,10 @@ class TransactionController {
             });
           }
         }
-        
+
         expenditure.amount = amount;
       }
-      
+
       if (purpose !== undefined) {
         if (purpose.trim() === '') {
           return res.status(400).json({
@@ -480,15 +519,15 @@ class TransactionController {
         }
         expenditure.purpose = purpose;
       }
-      
+
       if (description !== undefined) {
         expenditure.description = description;
       }
-      
+
       if (receipt !== undefined) {
         expenditure.receipt = receipt;
       }
-      
+
       expenditure.updatedBy = req.user.id;
       await expenditure.save();
 
@@ -503,14 +542,18 @@ class TransactionController {
   }
 
   /**
-   * Delete income record
+   * Delete income record (scoped)
    * @route DELETE /api/transactions/income/:id
    * @access Private/Admin
    */
   async deleteIncome(req, res, next) {
     try {
-      const income = await Income.findById(req.params.id);
-      
+      const organizationId = this.getOrgId(req);
+      const income = await Income.findOne({
+        _id: req.params.id,
+        organizationId
+      });
+
       if (!income) {
         return res.status(404).json({
           success: false,
@@ -537,14 +580,18 @@ class TransactionController {
   }
 
   /**
-   * Delete expenditure record
+   * Delete expenditure record (scoped)
    * @route DELETE /api/transactions/expenditure/:id
    * @access Private/Admin
    */
   async deleteExpenditure(req, res, next) {
     try {
-      const expenditure = await Expenditure.findByIdAndDelete(req.params.id);
-      
+      const organizationId = this.getOrgId(req);
+      const expenditure = await Expenditure.findOneAndDelete({
+        _id: req.params.id,
+        organizationId
+      });
+
       if (!expenditure) {
         return res.status(404).json({
           success: false,
@@ -562,22 +609,26 @@ class TransactionController {
   }
 
   /**
-   * Get transaction summary for dashboard
+   * Get transaction summary for dashboard (scoped)
    * @route GET /api/transactions/summary
    * @access Private
    */
   async getTransactionSummary(req, res, next) {
     try {
+      const organizationId = this.getOrgId(req);
+      const orgObjectId = new mongoose.Types.ObjectId(organizationId);
+
       const [totalIncome, totalExpenditure, recentPayments, incomeCount, expenditureCount, incomeByType] = await Promise.all([
-        Income.aggregate([{ $group: { _id: null, total: { $sum: '$amount' } } }]),
-        Expenditure.aggregate([{ $group: { _id: null, total: { $sum: '$amount' } } }]),
-        Payment.find({ status: 'paid' })
+        Income.aggregate([{ $match: { organizationId: orgObjectId } }, { $group: { _id: null, total: { $sum: '$amount' } } }]),
+        Expenditure.aggregate([{ $match: { organizationId: orgObjectId } }, { $group: { _id: null, total: { $sum: '$amount' } } }]),
+        Payment.find({ status: 'paid', organizationId })
           .sort({ paidAt: -1 })
           .limit(5)
           .populate('userId', 'name email'),
-        Income.countDocuments(),
-        Expenditure.countDocuments(),
+        Income.countDocuments({ organizationId }),
+        Expenditure.countDocuments({ organizationId }),
         Income.aggregate([
+          { $match: { organizationId: orgObjectId } },
           {
             $group: {
               _id: '$type',
@@ -596,7 +647,7 @@ class TransactionController {
       sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
 
       const monthlyIncome = await Income.aggregate([
-        { $match: { date: { $gte: sixMonthsAgo } } },
+        { $match: { organizationId: orgObjectId, date: { $gte: sixMonthsAgo } } },
         {
           $group: {
             _id: { year: { $year: '$date' }, month: { $month: '$date' } },
@@ -607,7 +658,7 @@ class TransactionController {
       ]);
 
       const monthlyExpenditure = await Expenditure.aggregate([
-        { $match: { date: { $gte: sixMonthsAgo } } },
+        { $match: { organizationId: orgObjectId, date: { $gte: sixMonthsAgo } } },
         {
           $group: {
             _id: { year: { $year: '$date' }, month: { $month: '$date' } },
@@ -641,17 +692,20 @@ class TransactionController {
   }
 
   /**
-   * Get current balance
+   * Get current balance (scoped)
    * @route GET /api/transactions/balance
    * @access Private/Admin
    */
   async getBalance(req, res, next) {
     try {
+      const organizationId = this.getOrgId(req);
+      const orgObjectId = new mongoose.Types.ObjectId(organizationId);
+
       const [totalIncome, totalExpenditure, paymentsTotal] = await Promise.all([
-        Income.aggregate([{ $group: { _id: null, total: { $sum: '$amount' } } }]),
-        Expenditure.aggregate([{ $group: { _id: null, total: { $sum: '$amount' } } }]),
+        Income.aggregate([{ $match: { organizationId: orgObjectId } }, { $group: { _id: null, total: { $sum: '$amount' } } }]),
+        Expenditure.aggregate([{ $match: { organizationId: orgObjectId } }, { $group: { _id: null, total: { $sum: '$amount' } } }]),
         Payment.aggregate([
-          { $match: { status: 'paid' } },
+          { $match: { status: 'paid', organizationId: orgObjectId } },
           { $group: { _id: null, total: { $sum: '$amount' } } }
         ])
       ]);
@@ -675,19 +729,18 @@ class TransactionController {
     }
   }
 
-    // Add these methods to your TransactionController class (after the existing methods)
-
   /**
-   * Get all income records for public/member viewing (Read-only)
+   * Get all income records for public/member viewing (Read-only, scoped)
    * @route GET /api/transactions/income/public
    * @access Private (Authenticated users)
    */
   async getAllIncomesPublic(req, res, next) {
     try {
+      const organizationId = this.getOrgId(req);
       const { startDate, endDate, page = 1, limit = 50 } = req.query;
-      
-      const query = {};
-      
+
+      const query = { organizationId };
+
       if (startDate && endDate) {
         query.date = {
           $gte: new Date(startDate),
@@ -697,7 +750,7 @@ class TransactionController {
 
       const skip = (parseInt(page) - 1) * parseInt(limit);
       const limitNum = parseInt(limit);
-      
+
       const [incomes, total, totalAmount] = await Promise.all([
         Income.find(query)
           .select('-createdBy -updatedBy -__v') // Exclude sensitive fields
@@ -733,16 +786,17 @@ class TransactionController {
   }
 
   /**
-   * Get all expenditure records for public/member viewing (Read-only)
+   * Get all expenditure records for public/member viewing (Read-only, scoped)
    * @route GET /api/transactions/expenditure/public
    * @access Private (Authenticated users)
    */
   async getAllExpendituresPublic(req, res, next) {
     try {
+      const organizationId = this.getOrgId(req);
       const { startDate, endDate, page = 1, limit = 50 } = req.query;
-      
-      const query = {};
-      
+
+      const query = { organizationId };
+
       if (startDate && endDate) {
         query.date = {
           $gte: new Date(startDate),
@@ -752,7 +806,7 @@ class TransactionController {
 
       const skip = (parseInt(page) - 1) * parseInt(limit);
       const limitNum = parseInt(limit);
-      
+
       const [expenditures, total, totalAmount] = await Promise.all([
         Expenditure.find(query)
           .select('-createdBy -updatedBy -__v -receipt') // Exclude sensitive fields
@@ -786,28 +840,30 @@ class TransactionController {
       next(error);
     }
   }
+
   /**
-   * Get recent transactions
+   * Get recent transactions (scoped)
    * @route GET /api/transactions/recent
    * @access Private/Admin
    */
   async getRecentTransactions(req, res, next) {
     try {
+      const organizationId = this.getOrgId(req);
       const { limit = 10 } = req.query;
       const limitNum = parseInt(limit);
-      
+
       const [incomes, expenditures] = await Promise.all([
-        Income.find()
+        Income.find({ organizationId })
           .sort({ createdAt: -1 })
           .limit(limitNum)
           .populate('createdBy', 'name')
           .populate('userId', 'name'),
-        Expenditure.find()
+        Expenditure.find({ organizationId })
           .sort({ createdAt: -1 })
           .limit(limitNum)
           .populate('createdBy', 'name')
       ]);
-      
+
       const transactions = [
         ...incomes.map(inc => ({
           id: inc._id,
@@ -832,9 +888,9 @@ class TransactionController {
           date: exp.date
         }))
       ];
-      
+
       transactions.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-      
+
       res.status(200).json({
         success: true,
         data: transactions.slice(0, limitNum)
@@ -844,6 +900,5 @@ class TransactionController {
     }
   }
 }
-
 
 module.exports = new TransactionController();

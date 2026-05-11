@@ -57,7 +57,7 @@ const paymentTypeRoutes = require('./routes/paymentTypes');
 const transactionRoutes = require('./routes/transactions');
 const reportRoutes = require('./routes/reports');
 const errorHandler = require('./middleware/errorHandler');
-
+const adminRoutes = require('./routes/adminRoutes');
 const app = express();
 
 // ==================== SECURITY MIDDLEWARE ====================
@@ -240,7 +240,7 @@ app.use('/api/payments', paymentRoutes);
 app.use('/api/payment-types', paymentTypeRoutes);
 app.use('/api/transactions', transactionRoutes);
 app.use('/api/reports', reportRoutes);
-
+app.use('/api/admin', adminRoutes);
 // ==================== PAYMENT GATEWAY ROUTES ====================
 const paymentGatewayRoutes = require('./routes/paymentGateway');
 app.use('/api/payment-gateway', paymentGatewayRoutes);

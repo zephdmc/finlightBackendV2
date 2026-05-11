@@ -1,3 +1,4 @@
+// backend/src/controllers/UserController.js
 const User = require('../models/User');
 const Payment = require('../models/Payment');
 const bcrypt = require('bcryptjs');
@@ -6,26 +7,35 @@ const mongoose = require('mongoose');
 /**
  * User Controller - Handles all user management operations
  * Manages member registration, profile updates, and user listings
+ * Now fully multi‑tenant: each user belongs to an organization.
  */
 class UserController {
   /**
-   * Get all users (members only for non-admin)
+   * Helper: get organizationId from authenticated user
+   */
+  getOrgId(req) {
+    return req.user.organizationId;
+  }
+
+  /**
+   * Get all users (members only for non-admin) – scoped to organization
    * @route GET /api/users
    * @access Private
    */
   async getAllUsers(req, res, next) {
     try {
+      const organizationId = this.getOrgId(req);
       const { page = 1, limit = 20, role, search } = req.query;
-      
-      const query = {};
-      
+
+      const query = { organizationId };
+
       // If not admin, only show members
       if (req.user.role !== 'admin') {
         query.role = 'member';
       } else if (role) {
         query.role = role;
       }
-      
+
       // Search by name or email
       if (search) {
         query.$or = [
@@ -35,7 +45,7 @@ class UserController {
       }
 
       const skip = (parseInt(page) - 1) * parseInt(limit);
-      
+
       const [users, total] = await Promise.all([
         User.find(query)
           .select('-password')
@@ -45,15 +55,16 @@ class UserController {
         User.countDocuments(query)
       ]);
 
-      // Get payment status for members
+      // Get payment status for members (scoped implicitly through user IDs)
       const usersWithPaymentStatus = await Promise.all(
         users.map(async (user) => {
           if (user.role === 'member') {
             const registrationPayment = await Payment.findOne({
               user: user._id,
-              type: 'registration'
+              type: 'registration',
+              organizationId  // 🆕 ensure payment belongs to same org
             });
-            
+
             return {
               ...user.toObject(),
               registrationStatus: registrationPayment?.status || 'unpaid'
@@ -81,14 +92,15 @@ class UserController {
   }
 
   /**
-   * Get single user by ID
+   * Get single user by ID – scoped to organization
    * @route GET /api/users/:id
    * @access Private
    */
   async getUserById(req, res, next) {
     try {
+      const organizationId = this.getOrgId(req);
       const { id } = req.params;
-      
+
       // Check authorization - user can only view themselves unless admin
       if (req.user.role !== 'admin' && req.user.id !== id) {
         return res.status(403).json({
@@ -97,8 +109,8 @@ class UserController {
         });
       }
 
-      const user = await User.findById(id).select('-password');
-      
+      const user = await User.findOne({ _id: id, organizationId }).select('-password');
+
       if (!user) {
         return res.status(404).json({
           success: false,
@@ -106,10 +118,10 @@ class UserController {
         });
       }
 
-      // Get user's payment records if member
+      // Get user's payment records if member (scoped by organization)
       let payments = [];
       if (user.role === 'member') {
-        payments = await Payment.find({ user: user._id })
+        payments = await Payment.find({ user: user._id, organizationId })
           .sort({ createdAt: -1 });
       }
 
@@ -126,33 +138,34 @@ class UserController {
   }
 
   /**
-   * Register new member (Admin only)
+   * Register new member (Admin only) – scoped to organization
    * @route POST /api/users/register
    * @access Private/Admin
    */
   async registerMember(req, res, next) {
-    // REMOVED TRANSACTIONS - Fixed version
     try {
+      const organizationId = this.getOrgId(req);
       const { name, email, password, role = 'member' } = req.body;
-      
-      // Check if user exists
-      const existingUser = await User.findOne({ email });
+
+      // Check if user exists within the same organization
+      const existingUser = await User.findOne({ email, organizationId });
       if (existingUser) {
         return res.status(400).json({
           success: false,
-          message: 'User with this email already exists'
+          message: 'User with this email already exists in your organization'
         });
       }
 
-      // Create user (without transaction)
+      // Create user
       const user = await User.create({
         name,
         email,
         password,
-        role
+        role,
+        organizationId   // 🆕 assign to current organization
       });
 
-      // If member, create registration payment record (without transaction)
+      // If member, create registration payment record (scoped)
       if (role === 'member') {
         await Payment.create({
           user: user._id,
@@ -160,7 +173,8 @@ class UserController {
           amount: 500, // Registration fee
           status: 'unpaid',
           dueDate: new Date(),
-          description: 'Registration fee for new member'
+          description: 'Registration fee for new member',
+          organizationId
         });
       }
 
@@ -181,16 +195,18 @@ class UserController {
       next(error);
     }
   }
-/**
- * Update user profile
- * @route PUT /api/users/:id
- * @access Private
- */
-async updateUser(req, res, next) {
+
+  /**
+   * Update user profile – scoped to organization
+   * @route PUT /api/users/:id
+   * @access Private
+   */
+  async updateUser(req, res, next) {
     try {
+      const organizationId = this.getOrgId(req);
       const { id } = req.params;
       const { name, email, password, role } = req.body;
-      
+
       // Check authorization
       if (req.user.role !== 'admin' && req.user.id !== id) {
         return res.status(403).json({
@@ -198,34 +214,33 @@ async updateUser(req, res, next) {
           message: 'Not authorized to update this user'
         });
       }
-  
-      const user = await User.findById(id);
-      
+
+      const user = await User.findOne({ _id: id, organizationId });
+
       if (!user) {
         return res.status(404).json({
           success: false,
           message: 'User not found'
         });
       }
-  
+
       // Update fields
       if (name) user.name = name;
       if (email && req.user.role === 'admin') user.email = email;
       if (role && req.user.role === 'admin') user.role = role;
       if (password) {
-        user.password = password; // Just assign - model's pre-save will hash it
+        user.password = password; // model's pre-save will hash it
       }
-      
+
       await user.save();
-  
-      // Return user without password
+
       const userResponse = {
         id: user._id,
         name: user.name,
         email: user.email,
         role: user.role
       };
-  
+
       res.status(200).json({
         success: true,
         data: userResponse,
@@ -237,15 +252,15 @@ async updateUser(req, res, next) {
   }
 
   /**
-   * Delete user (Admin only)
+   * Delete user (Admin only) – scoped to organization
    * @route DELETE /api/users/:id
    * @access Private/Admin
    */
   async deleteUser(req, res, next) {
-    // REMOVED TRANSACTIONS - Fixed version
     try {
+      const organizationId = this.getOrgId(req);
       const { id } = req.params;
-      
+
       // Prevent admin from deleting themselves
       if (req.user.id === id) {
         return res.status(400).json({
@@ -254,8 +269,8 @@ async updateUser(req, res, next) {
         });
       }
 
-      const user = await User.findById(id);
-      
+      const user = await User.findOne({ _id: id, organizationId });
+
       if (!user) {
         return res.status(404).json({
           success: false,
@@ -263,9 +278,9 @@ async updateUser(req, res, next) {
         });
       }
 
-      // Delete user and associated payments
+      // Delete user and associated payments (scoped)
       await User.findByIdAndDelete(id);
-      await Payment.deleteMany({ user: id });
+      await Payment.deleteMany({ user: id, organizationId });
 
       res.status(200).json({
         success: true,
@@ -277,21 +292,20 @@ async updateUser(req, res, next) {
   }
 
   /**
-   * Get user statistics (Admin only)
+   * Get user statistics (Admin only) – scoped to organization
    * @route GET /api/users/stats
    * @access Private/Admin
    */
   async getUserStats(req, res, next) {
     try {
+      const organizationId = this.getOrgId(req);
+
       const [totalMembers, totalAdmins, registrationStats] = await Promise.all([
-        User.countDocuments({ role: 'member' }),
-        User.countDocuments({ role: 'admin' }),
+        User.countDocuments({ role: 'member', organizationId }),
+        User.countDocuments({ role: 'admin', organizationId }),
         Payment.aggregate([
-          { $match: { type: 'registration' } },
-          { $group: {
-            _id: '$status',
-            count: { $sum: 1 }
-          }}
+          { $match: { type: 'registration', organizationId: new mongoose.Types.ObjectId(organizationId) } },
+          { $group: { _id: '$status', count: { $sum: 1 } } }
         ])
       ]);
 
@@ -308,8 +322,8 @@ async updateUser(req, res, next) {
             unpaid: unpaidRegistrations,
             total: totalMembers
           },
-          registrationPercentage: totalMembers > 0 
-            ? (paidRegistrations / totalMembers) * 100 
+          registrationPercentage: totalMembers > 0
+            ? (paidRegistrations / totalMembers) * 100
             : 0
         }
       });
@@ -319,15 +333,15 @@ async updateUser(req, res, next) {
   }
 
   /**
-   * Bulk import members (Admin only)
+   * Bulk import members (Admin only) – scoped to organization
    * @route POST /api/users/bulk-import
    * @access Private/Admin
    */
   async bulkImportMembers(req, res, next) {
-    // REMOVED TRANSACTIONS - Fixed version
     try {
+      const organizationId = this.getOrgId(req);
       const { members } = req.body;
-      
+
       if (!members || !Array.isArray(members) || members.length === 0) {
         return res.status(400).json({
           success: false,
@@ -335,19 +349,16 @@ async updateUser(req, res, next) {
         });
       }
 
-      const results = {
-        successful: [],
-        failed: []
-      };
+      const results = { successful: [], failed: [] };
 
       for (const memberData of members) {
         try {
           const { name, email, password = 'default123' } = memberData;
-          
-          // Check if user exists
-          const existingUser = await User.findOne({ email });
+
+          // Check if user exists within the same organization
+          const existingUser = await User.findOne({ email, organizationId });
           if (existingUser) {
-            results.failed.push({ email, reason: 'User already exists' });
+            results.failed.push({ email, reason: 'User already exists in this organization' });
             continue;
           }
 
@@ -356,7 +367,8 @@ async updateUser(req, res, next) {
             name,
             email,
             password,
-            role: 'member'
+            role: 'member',
+            organizationId   // 🆕
           });
 
           // Create registration payment
@@ -365,7 +377,8 @@ async updateUser(req, res, next) {
             type: 'registration',
             amount: 500,
             status: 'unpaid',
-            dueDate: new Date()
+            dueDate: new Date(),
+            organizationId
           });
 
           results.successful.push({ id: user._id, name, email });
@@ -384,36 +397,36 @@ async updateUser(req, res, next) {
     }
   }
 
-/**
- * Reset user password (Admin only)
- * @route POST /api/users/:id/reset-password
- * @access Private/Admin
- */
-async resetPassword(req, res, next) {
+  /**
+   * Reset user password (Admin only) – scoped to organization
+   * @route POST /api/users/:id/reset-password
+   * @access Private/Admin
+   */
+  async resetPassword(req, res, next) {
     try {
+      const organizationId = this.getOrgId(req);
       const { id } = req.params;
       const { newPassword } = req.body;
-      
+
       if (!newPassword || newPassword.length < 6) {
         return res.status(400).json({
           success: false,
           message: 'Password must be at least 6 characters long'
         });
       }
-  
-      const user = await User.findById(id);
-      
+
+      const user = await User.findOne({ _id: id, organizationId });
+
       if (!user) {
         return res.status(404).json({
           success: false,
           message: 'User not found'
         });
       }
-  
-      // Just assign - let the model's pre-save middleware handle hashing
+
       user.password = newPassword;
       await user.save();
-  
+
       res.status(200).json({
         success: true,
         message: 'Password reset successfully'
@@ -422,15 +435,17 @@ async resetPassword(req, res, next) {
       next(error);
     }
   }
+
   /**
-   * Get member payment summary (for dashboard)
+   * Get member payment summary (for dashboard) – scoped to organization
    * @route GET /api/users/:id/payment-summary
    * @access Private
    */
   async getMemberPaymentSummary(req, res, next) {
     try {
+      const organizationId = this.getOrgId(req);
       const { id } = req.params;
-      
+
       // Check authorization
       if (req.user.role !== 'admin' && req.user.id !== id) {
         return res.status(403).json({
@@ -439,8 +454,17 @@ async resetPassword(req, res, next) {
         });
       }
 
-      const payments = await Payment.find({ user: id });
-      
+      // Ensure user belongs to the organization
+      const user = await User.findOne({ _id: id, organizationId });
+      if (!user) {
+        return res.status(404).json({
+          success: false,
+          message: 'User not found in your organization'
+        });
+      }
+
+      const payments = await Payment.find({ user: id, organizationId });
+
       const summary = {
         totalPaid: 0,
         totalOutstanding: 0,
@@ -459,7 +483,7 @@ async resetPassword(req, res, next) {
         } else {
           summary.totalOutstanding += payment.amount || 0;
         }
-        
+
         summary.payments.push({
           id: payment._id,
           type: payment.type,

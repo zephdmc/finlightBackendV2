@@ -1,3 +1,4 @@
+// backend/src/controllers/ReportController.js
 const User = require('../models/User');
 const Payment = require('../models/Payment');
 const Income = require('../models/Income');
@@ -7,35 +8,46 @@ const mongoose = require('mongoose');
 /**
  * Report Controller - Handles all reporting functionality
  * Provides comprehensive financial and membership reports
+ * Now fully multi‑tenant: every query is filtered by organizationId.
  */
 class ReportController {
   /**
-   * Get overall financial summary
+   * Get organizationId from authenticated user
+   */
+  getOrgId(req) {
+    return req.user.organizationId;
+  }
+
+  /**
+   * Get overall financial summary (scoped to organization)
    * @route GET /api/reports/summary
    */
   async getSummary(req, res, next) {
     try {
+      const organizationId = this.getOrgId(req);
       const [totalIncome, totalExpenditure, totalMembers, unpaidPayments, paidMembers] = await Promise.all([
         Income.aggregate([
+          { $match: { organizationId: new mongoose.Types.ObjectId(organizationId) } },
           { $group: { _id: null, total: { $sum: '$amount' } } }
         ]),
         Expenditure.aggregate([
+          { $match: { organizationId: new mongoose.Types.ObjectId(organizationId) } },
           { $group: { _id: null, total: { $sum: '$amount' } } }
         ]),
-        User.countDocuments({ role: 'member' }),
+        User.countDocuments({ role: 'member', organizationId }),
         Payment.aggregate([
-          { $match: { status: 'unpaid' } },
+          { $match: { organizationId: new mongoose.Types.ObjectId(organizationId), status: 'unpaid' } },
           { $group: { _id: null, total: { $sum: '$amount' } } }
         ]),
-        Payment.countDocuments({ type: 'registration', status: 'paid' })
+        Payment.countDocuments({ type: 'registration', status: 'paid', organizationId })
       ]);
 
       const income = totalIncome[0]?.total || 0;
       const expenditure = totalExpenditure[0]?.total || 0;
       const outstanding = unpaidPayments[0]?.total || 0;
 
-      // Get recent activity for dashboard
-      const recentTransactions = await this.getRecentTransactions(5);
+      // Get recent activity for dashboard (scoped)
+      const recentTransactions = await this.getRecentTransactions(5, organizationId);
 
       res.status(200).json({
         success: true,
@@ -57,15 +69,16 @@ class ReportController {
   }
 
   /**
-   * Get paid members report
+   * Get paid members report (scoped)
    * @route GET /api/reports/paid-members
    */
   async getPaidMembers(req, res, next) {
     try {
+      const organizationId = this.getOrgId(req);
       const { startDate, endDate, page = 1, limit = 50 } = req.query;
-      
-      const query = { type: 'registration', status: 'paid' };
-      
+
+      const query = { type: 'registration', status: 'paid', organizationId };
+
       if (startDate && endDate) {
         query.paidAt = {
           $gte: new Date(startDate),
@@ -74,7 +87,7 @@ class ReportController {
       }
 
       const skip = (parseInt(page) - 1) * parseInt(limit);
-      
+
       const [paidMembers, total] = await Promise.all([
         Payment.find(query)
           .populate('user', 'name email createdAt')
@@ -103,18 +116,19 @@ class ReportController {
   }
 
   /**
-   * Get outstanding payments report
+   * Get outstanding payments report (scoped)
    * @route GET /api/reports/outstanding
    */
   async getOutstandingPayments(req, res, next) {
     try {
+      const organizationId = this.getOrgId(req);
       const { type, page = 1, limit = 50 } = req.query;
-      
-      const query = { status: 'unpaid' };
+
+      const query = { status: 'unpaid', organizationId };
       if (type) query.type = type;
 
       const skip = (parseInt(page) - 1) * parseInt(limit);
-      
+
       const [outstanding, total] = await Promise.all([
         Payment.find(query)
           .populate('user', 'name email')
@@ -145,28 +159,29 @@ class ReportController {
   }
 
   /**
-   * Get income report with filters
+   * Get income report with filters (scoped)
    * @route GET /api/reports/income
    */
   async getIncomeReport(req, res, next) {
     try {
+      const organizationId = this.getOrgId(req);
       const { startDate, endDate, source, page = 1, limit = 50 } = req.query;
-      
-      const query = {};
-      
+
+      const query = { organizationId };
+
       if (startDate && endDate) {
         query.createdAt = {
           $gte: new Date(startDate),
           $lte: new Date(endDate)
         };
       }
-      
+
       if (source) {
         query.source = { $regex: source, $options: 'i' };
       }
 
       const skip = (parseInt(page) - 1) * parseInt(limit);
-      
+
       const [incomes, total, summary] = await Promise.all([
         Income.find(query)
           .populate('createdBy', 'name')
@@ -176,12 +191,14 @@ class ReportController {
         Income.countDocuments(query),
         Income.aggregate([
           { $match: query },
-          { $group: { 
-            _id: null, 
-            total: { $sum: '$amount' },
-            count: { $sum: 1 },
-            avgAmount: { $avg: '$amount' }
-          } }
+          {
+            $group: {
+              _id: null,
+              total: { $sum: '$amount' },
+              count: { $sum: 1 },
+              avgAmount: { $avg: '$amount' }
+            }
+          }
         ])
       ]);
 
@@ -208,28 +225,29 @@ class ReportController {
   }
 
   /**
-   * Get expenditure report with filters
+   * Get expenditure report with filters (scoped)
    * @route GET /api/reports/expenditure
    */
   async getExpenditureReport(req, res, next) {
     try {
+      const organizationId = this.getOrgId(req);
       const { startDate, endDate, purpose, page = 1, limit = 50 } = req.query;
-      
-      const query = {};
-      
+
+      const query = { organizationId };
+
       if (startDate && endDate) {
         query.createdAt = {
           $gte: new Date(startDate),
           $lte: new Date(endDate)
         };
       }
-      
+
       if (purpose) {
         query.purpose = { $regex: purpose, $options: 'i' };
       }
 
       const skip = (parseInt(page) - 1) * parseInt(limit);
-      
+
       const [expenditures, total, summary] = await Promise.all([
         Expenditure.find(query)
           .populate('createdBy', 'name')
@@ -239,12 +257,14 @@ class ReportController {
         Expenditure.countDocuments(query),
         Expenditure.aggregate([
           { $match: query },
-          { $group: { 
-            _id: null, 
-            total: { $sum: '$amount' },
-            count: { $sum: 1 },
-            avgAmount: { $avg: '$amount' }
-          } }
+          {
+            $group: {
+              _id: null,
+              total: { $sum: '$amount' },
+              count: { $sum: 1 },
+              avgAmount: { $avg: '$amount' }
+            }
+          }
         ])
       ]);
 
@@ -271,13 +291,23 @@ class ReportController {
   }
 
   /**
-   * Get member payment report (for specific member)
+   * Get member payment report (for specific member) – scoped to organization
    * @route GET /api/reports/member/:userId
    */
   async getMemberPaymentReport(req, res, next) {
     try {
+      const organizationId = this.getOrgId(req);
       const { userId } = req.params;
       const { startDate, endDate } = req.query;
+
+      // Ensure the target user belongs to the same organization
+      const targetUser = await User.findOne({ _id: userId, organizationId });
+      if (!targetUser) {
+        return res.status(404).json({
+          success: false,
+          message: 'Member not found in your organization'
+        });
+      }
 
       if (req.user.role !== 'admin' && req.user.id !== userId) {
         return res.status(403).json({
@@ -286,8 +316,8 @@ class ReportController {
         });
       }
 
-      const query = { user: userId };
-      
+      const query = { user: userId, organizationId };
+
       if (startDate && endDate) {
         query.createdAt = {
           $gte: new Date(startDate),
@@ -303,7 +333,7 @@ class ReportController {
       const totalPaid = payments
         .filter(p => p.status === 'paid')
         .reduce((sum, p) => sum + p.amount, 0);
-      
+
       const totalOutstanding = payments
         .filter(p => p.status === 'unpaid')
         .reduce((sum, p) => sum + p.amount, 0);
@@ -328,13 +358,14 @@ class ReportController {
   }
 
   /**
-   * Get monthly financial summary (for charts)
+   * Get monthly financial summary (for charts) – scoped
    * @route GET /api/reports/monthly-summary
    */
   async getMonthlySummary(req, res, next) {
     try {
+      const organizationId = this.getOrgId(req);
       const { year = new Date().getFullYear() } = req.query;
-      
+
       const startDate = new Date(year, 0, 1);
       const endDate = new Date(year, 11, 31, 23, 59, 59);
 
@@ -342,6 +373,7 @@ class ReportController {
         Income.aggregate([
           {
             $match: {
+              organizationId: new mongoose.Types.ObjectId(organizationId),
               createdAt: { $gte: startDate, $lte: endDate }
             }
           },
@@ -355,6 +387,7 @@ class ReportController {
         Expenditure.aggregate([
           {
             $match: {
+              organizationId: new mongoose.Types.ObjectId(organizationId),
               createdAt: { $gte: startDate, $lte: endDate }
             }
           },
@@ -374,7 +407,7 @@ class ReportController {
       monthlyIncome.forEach(item => {
         incomeByMonth[item._id] = item.total;
       });
-      
+
       monthlyExpenditure.forEach(item => {
         expenditureByMonth[item._id] = item.total;
       });
@@ -402,15 +435,17 @@ class ReportController {
   }
 
   /**
-   * Get recent transactions (helper method)
+   * Get recent transactions (helper method, now tenant-aware)
+   * @param {number} limit
+   * @param {string} organizationId
    */
-  async getRecentTransactions(limit = 10) {
+  async getRecentTransactions(limit = 10, organizationId) {
     const [incomes, expenditures] = await Promise.all([
-      Income.find()
+      Income.find({ organizationId })
         .sort({ createdAt: -1 })
         .limit(limit)
         .populate('createdBy', 'name'),
-      Expenditure.find()
+      Expenditure.find({ organizationId })
         .sort({ createdAt: -1 })
         .limit(limit)
         .populate('createdBy', 'name')
@@ -443,37 +478,37 @@ class ReportController {
   }
 
   /**
-   * Export report as CSV
+   * Export report as CSV (scoped to organization)
    * @route GET /api/reports/export/:type
    */
   async exportReport(req, res, next) {
     try {
+      const organizationId = this.getOrgId(req);
       const { type } = req.params;
       const { startDate, endDate } = req.query;
-      
+
       let data = [];
       let filename = '';
       let headers = [];
-      
-      // Build date filter
-      const dateFilter = {};
+
+      // Build date filter scoped by organization
+      const dateFilter = { organizationId };
       if (startDate && endDate) {
         dateFilter.createdAt = {
           $gte: new Date(startDate),
           $lte: new Date(endDate)
         };
       }
-      
-      switch(type) {
+
+      switch (type) {
         case 'income': {
-          // Fetch income data directly
           const incomes = await Income.find(dateFilter)
             .populate('createdBy', 'name')
             .sort({ createdAt: -1 });
-          
-          filename = `income_report_${new Date().toISOString().split('T')[0]}.csv`;
+
+          filename = `income_report_${organizationId}_${new Date().toISOString().split('T')[0]}.csv`;
           headers = ['Date', 'Description', 'Source', 'Amount', 'Recorded By'];
-          
+
           data = incomes.map(item => ({
             'Date': new Date(item.createdAt).toLocaleDateString(),
             'Description': item.description || 'N/A',
@@ -483,16 +518,15 @@ class ReportController {
           }));
           break;
         }
-          
+
         case 'expenditure': {
-          // Fetch expenditure data directly
           const expenditures = await Expenditure.find(dateFilter)
             .populate('createdBy', 'name')
             .sort({ createdAt: -1 });
-          
-          filename = `expenditure_report_${new Date().toISOString().split('T')[0]}.csv`;
+
+          filename = `expenditure_report_${organizationId}_${new Date().toISOString().split('T')[0]}.csv`;
           headers = ['Date', 'Purpose', 'Description', 'Amount', 'Recorded By'];
-          
+
           data = expenditures.map(item => ({
             'Date': new Date(item.createdAt).toLocaleDateString(),
             'Purpose': item.purpose || 'N/A',
@@ -502,16 +536,15 @@ class ReportController {
           }));
           break;
         }
-          
+
         case 'payments': {
-          // Fetch payments data directly
           const payments = await Payment.find(dateFilter)
             .populate('user', 'name email')
             .sort({ createdAt: -1 });
-          
-          filename = `payments_report_${new Date().toISOString().split('T')[0]}.csv`;
+
+          filename = `payments_report_${organizationId}_${new Date().toISOString().split('T')[0]}.csv`;
           headers = ['Date', 'Member Name', 'Member Email', 'Payment Type', 'Amount', 'Status', 'Reference'];
-          
+
           data = payments.map(item => ({
             'Date': new Date(item.createdAt).toLocaleDateString(),
             'Member Name': item.user?.name || 'N/A',
@@ -523,24 +556,24 @@ class ReportController {
           }));
           break;
         }
-          
+
         case 'members': {
-          // Fetch members data directly
-          const members = await User.find({ role: 'member' })
+          const members = await User.find({ role: 'member', organizationId })
             .select('-password')
             .sort({ createdAt: -1 });
-          
-          filename = `members_report_${new Date().toISOString().split('T')[0]}.csv`;
+
+          filename = `members_report_${organizationId}_${new Date().toISOString().split('T')[0]}.csv`;
           headers = ['Name', 'Email', 'Role', 'Registration Date', 'Has Paid Registration'];
-          
-          // Get payment status for each member
+
+          // Get payment status for each member (scoped)
           const membersWithStatus = await Promise.all(members.map(async (member) => {
             const registrationPayment = await Payment.findOne({
               user: member._id,
               type: 'registration',
-              status: 'paid'
+              status: 'paid',
+              organizationId
             });
-            
+
             return {
               'Name': member.name,
               'Email': member.email,
@@ -549,39 +582,35 @@ class ReportController {
               'Has Paid Registration': registrationPayment ? 'Yes' : 'No'
             };
           }));
-          
+
           data = membersWithStatus;
           break;
         }
-          
+
         default:
           return res.status(400).json({
             success: false,
             message: 'Invalid report type. Valid types: income, expenditure, payments, members'
           });
       }
-      
+
       if (data.length === 0) {
         return res.status(404).json({
           success: false,
           message: 'No data found for the selected report'
         });
       }
-      
+
       // Generate CSV content
       const csvHeaders = headers;
       const csvRows = [];
-      
-      // Add headers
+
       csvRows.push(csvHeaders.join(','));
-      
-      // Add data rows
+
       for (const row of data) {
         const values = csvHeaders.map(header => {
           let value = row[header] || '';
-          // Convert to string and escape quotes
           value = String(value).replace(/"/g, '""');
-          // Wrap in quotes if contains comma, newline, or quote
           if (value.includes(',') || value.includes('\n') || value.includes('"')) {
             value = `"${value}"`;
           }
@@ -589,18 +618,15 @@ class ReportController {
         });
         csvRows.push(values.join(','));
       }
-      
+
       const csvContent = csvRows.join('\n');
-      
-      // Set response headers for CSV download
+
       res.setHeader('Content-Type', 'text/csv');
       res.setHeader('Content-Disposition', `attachment; filename=${filename}`);
       res.setHeader('Cache-Control', 'no-cache');
       res.setHeader('Pragma', 'no-cache');
-      
-      // Send CSV file
+
       res.status(200).send(csvContent);
-      
     } catch (error) {
       console.error('Export error:', error);
       next(error);

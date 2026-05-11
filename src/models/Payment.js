@@ -66,16 +66,34 @@ const paymentSchema = new mongoose.Schema({
   description: {
     type: String
   },
+  organizationId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Organization',
+    required: [true, 'Organization ID is required']
+  },
   createdAt: {
     type: Date,
     default: Date.now
   }
 });
 
-// Index for efficient queries
-paymentSchema.index({ user: 1, status: 1 });
-paymentSchema.index({ type: 1, dueDate: 1 });
-paymentSchema.index({ paymentTypeId: 1 });
-paymentSchema.index({ parentPaymentId: 1 });
+// Indexes for multi-tenant queries
+// Most common: fetch all payments for an organization, sorted by creation
+paymentSchema.index({ organizationId: 1, createdAt: -1 });
+
+// Filter by user within an organization
+paymentSchema.index({ organizationId: 1, user: 1, status: 1 });
+
+// Filter by payment type within an organization
+paymentSchema.index({ organizationId: 1, paymentTypeId: 1 });
+
+// Filter by status and due date (e.g., overdue payments)
+paymentSchema.index({ organizationId: 1, status: 1, dueDate: 1 });
+
+// For partial payment chains
+paymentSchema.index({ organizationId: 1, parentPaymentId: 1 });
+
+// Keep existing indexes that are still useful, but scope them with organizationId where possible.
+// Note: transactionReference remains globally unique (fine as is).
 
 module.exports = mongoose.model('Payment', paymentSchema);

@@ -21,6 +21,11 @@ const expenditureSchema = new mongoose.Schema({
     ref: 'User',
     required: true
   },
+  organizationId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Organization',
+    required: [true, 'Organization ID is required']
+  },
   receipt: {
     type: String
   },
@@ -29,5 +34,11 @@ const expenditureSchema = new mongoose.Schema({
     default: Date.now
   }
 });
+
+// Index for tenant-based queries
+expenditureSchema.index({ organizationId: 1, createdAt: -1 });
+
+// Compound index for filtering by organization and createdBy
+expenditureSchema.index({ organizationId: 1, createdBy: 1 });
 
 module.exports = mongoose.model('Expenditure', expenditureSchema);

@@ -1,5 +1,7 @@
 const express = require('express');
 const router = express.Router();
+
+
 // TEMPORARY TEST ROUTE - Remove after debugging
 router.post('/test-login', (req, res) => {
     console.log('🔥 TEST ROUTE HIT!');
@@ -14,7 +16,6 @@ const authController = require('../controllers/authController');
 const { protect } = require('../middleware/auth');
 const roleCheck = require('../middleware/roleCheck');
 const ValidationMiddleware = require('../middleware/validation');
-
 // Import body and param from express-validator
 const { body, param } = require('express-validator');
 
@@ -39,6 +40,8 @@ router.post(
   ValidationMiddleware.auth.login,
   authController.login
 );
+
+router.post('/signup', authController);
 
 /**
  * @route   GET /api/auth/me
@@ -168,6 +171,8 @@ router.get(
     roleCheck('admin'),
     authController.checkMemberLimit
   );
+
+
 
 /**
  * @route   POST /api/auth/refresh-token
