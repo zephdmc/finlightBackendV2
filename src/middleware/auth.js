@@ -20,7 +20,28 @@ const protect = async (req, res, next) => {
     // Verify token and extract payload
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
-    // Ensure token contains organizationId (should be added during login/register)
+    // 🆕 Super admin bypass – no organizationId required
+    if (decoded.role === 'super_admin') {
+      // Fetch the super admin user (no organization filter)
+      const user = await User.findById(decoded.id).select('-password');
+      if (!user) {
+        return res.status(401).json({
+          success: false,
+          message: 'Super admin not found'
+        });
+      }
+      req.user = {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        organizationId: user.organizationId || null, // may be null or set
+        hasPaidRegistration: user.hasPaidRegistration
+      };
+      return next();
+    }
+
+    // For regular admins and members: must have organizationId
     if (!decoded.organizationId) {
       return res.status(401).json({
         success: false,
@@ -41,14 +62,13 @@ const protect = async (req, res, next) => {
       });
     }
 
-    // Attach full user object and organizationId to req.user
     req.user = {
       id: user._id,
       name: user.name,
       email: user.email,
       role: user.role,
       organizationId: user.organizationId,
-      hasPaidRegistration: user.hasPaidRegistration  // if this field exists
+      hasPaidRegistration: user.hasPaidRegistration
     };
     next();
   } catch (error) {
@@ -60,27 +80,40 @@ const protect = async (req, res, next) => {
   }
 };
 
-/**
- * Middleware to check if member has paid registration fee.
- * Admins are automatically allowed.
- * Note: This relies on req.user.hasPaidRegistration field.
- * If that field doesn't exist on User model, you may need to compute it dynamically.
- */
 const requireRegistrationPayment = async (req, res, next) => {
-  // Admins bypass registration payment check
-  if (req.user.role === 'admin') {
+  if (req.user.role === 'admin' || req.user.role === 'super_admin') {
     return next();
   }
-
-  // For members, check the `hasPaidRegistration` flag (ensure it's updated when payment is made)
   if (!req.user.hasPaidRegistration) {
     return res.status(403).json({
       success: false,
       message: 'Please pay registration fee to access dashboard'
     });
   }
-
   next();
 };
+
+/**
+ * Middleware to check if member has paid registration fee.
+ * Admins are automatically allowed.
+ * Note: This relies on req.user.hasPaidRegistration field.
+ * If that field doesn't exist on User model, you may need to compute it dynamically.
+//  */
+// const requireRegistrationPayment = async (req, res, next) => {
+//   // Admins bypass registration payment check
+//   if (req.user.role === 'admin') {
+//     return next();
+//   }
+
+//   // For members, check the `hasPaidRegistration` flag (ensure it's updated when payment is made)
+//   if (!req.user.hasPaidRegistration) {
+//     return res.status(403).json({
+//       success: false,
+//       message: 'Please pay registration fee to access dashboard'
+//     });
+//   }
+
+//   next();
+// };
 
 module.exports = { protect, requireRegistrationPayment };
