@@ -32,7 +32,16 @@ const expenditureSchema = new mongoose.Schema({
   createdAt: {
     type: Date,
     default: Date.now
-  }
+  },
+updatedBy: {
+  type: mongoose.Schema.Types.ObjectId,
+  ref: 'User'
+},
+updatedAt: {
+  type: Date
+}
+
+
 });
 
 // Index for tenant-based queries

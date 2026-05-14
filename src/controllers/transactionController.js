@@ -2,6 +2,7 @@
 const Income = require('../models/Income');
 const Expenditure = require('../models/Expenditure');
 const Payment = require('../models/Payment');
+const mongoose = require('mongoose');
 
 /**
  * Transaction Controller - Handles income and expenditure operations
@@ -11,129 +12,153 @@ const Payment = require('../models/Payment');
 class TransactionController {
   /**
    * Get organizationId from authenticated user
+   * Returns null for super-admin (they have no organization restriction)
    */
-  getOrgId(req) {
+  getOrgId = (req) => {
+    // Super admin has no organization - they manage all organizations
+    if (!req.user) return null;
+    if (req.user.role === 'super-admin' || req.user.role === 'super_admin') {
+      return null;
+    }
     return req.user.organizationId;
-  }
+  };
 
   /**
    * Record new income (scoped to organization)
    * @route POST /api/transactions/income
    * @access Private/Admin
    */
-  async recordIncome(req, res, next) {
+  recordIncome = async (req, res, next) => {
     try {
       const organizationId = this.getOrgId(req);
       const { amount, source, description } = req.body;
-
-      // Validate amount
+  
       if (!amount || amount <= 0) {
         return res.status(400).json({
           success: false,
           message: 'Amount must be greater than 0'
         });
       }
-
-      // Validate source
+  
       if (!source || source.trim() === '') {
         return res.status(400).json({
           success: false,
           message: 'Source of income is required'
         });
       }
-
+  
+      // FIXED: Always require organizationId
+      if (!organizationId) {
+        return res.status(400).json({
+          success: false,
+          message: 'Organization ID is required. Please ensure you are logged into an organization.'
+        });
+      }
+  
       const income = await Income.create({
         amount,
         source,
         description: description || '',
         createdBy: req.user.id,
-        organizationId,                     // 🆕 multi‑tenant
-        date: new Date(),
-        type: 'manual'
+        organizationId: organizationId,  // ✅ Always set this
+        type: 'manual',
+        date: new Date()
       });
-
+  
       res.status(201).json({
         success: true,
         data: income,
         message: 'Income recorded successfully'
       });
     } catch (error) {
+      console.error('Error in recordIncome:', error);
       next(error);
     }
-  }
+  };
 
   /**
    * Record new expenditure (scoped to organization)
    * @route POST /api/transactions/expenditure
    * @access Private/Admin
    */
-  async recordExpenditure(req, res, next) {
+  recordExpenditure = async (req, res, next) => {
     try {
       const organizationId = this.getOrgId(req);
+      const userRole = req.user.role;
       const { amount, purpose, description, receipt } = req.body;
-
-      // Validate amount
+  
       if (!amount || amount <= 0) {
         return res.status(400).json({
           success: false,
           message: 'Amount must be greater than 0'
         });
       }
-
-      // Validate purpose
+  
       if (!purpose || purpose.trim() === '') {
         return res.status(400).json({
           success: false,
           message: 'Purpose of expenditure is required'
         });
       }
-
-      // Check if sufficient balance exists (scoped to organization)
-      const totalIncome = await Income.aggregate([
-        { $match: { organizationId: new mongoose.Types.ObjectId(organizationId) } },
-        { $group: { _id: null, total: { $sum: '$amount' } } }
-      ]);
-
-      const totalExpenditure = await Expenditure.aggregate([
-        { $match: { organizationId: new mongoose.Types.ObjectId(organizationId) } },
-        { $group: { _id: null, total: { $sum: '$amount' } } }
-      ]);
-
-      const balance = (totalIncome[0]?.total || 0) - (totalExpenditure[0]?.total || 0);
-
-      if (balance < amount) {
+  
+      // FIXED: Always require organizationId for non-super-admin
+      if (!organizationId && userRole !== 'super-admin' && userRole !== 'super_admin') {
         return res.status(400).json({
           success: false,
-          message: 'Insufficient funds for this expenditure',
-          data: { balance, requested: amount }
+          message: 'Organization ID is required. Please ensure you are logged into an organization.'
         });
       }
-
+  
+      // For non-super-admin, check if sufficient balance exists
+      if (userRole !== 'super-admin' && userRole !== 'super_admin' && organizationId) {
+        const orgObjectId = new mongoose.Types.ObjectId(organizationId);
+        
+        const totalIncome = await Income.aggregate([
+          { $match: { organizationId: orgObjectId } },
+          { $group: { _id: null, total: { $sum: '$amount' } } }
+        ]);
+  
+        const totalExpenditure = await Expenditure.aggregate([
+          { $match: { organizationId: orgObjectId } },
+          { $group: { _id: null, total: { $sum: '$amount' } } }
+        ]);
+  
+        const balance = (totalIncome[0]?.total || 0) - (totalExpenditure[0]?.total || 0);
+  
+        if (balance < amount) {
+          return res.status(400).json({
+            success: false,
+            message: 'Insufficient funds for this expenditure',
+            data: { balance, requested: amount }
+          });
+        }
+      }
+  
+      // FIXED: Always include organizationId (not conditionally)
       const expenditure = await Expenditure.create({
         amount,
         purpose,
         description: description || '',
         receipt: receipt || null,
         createdBy: req.user.id,
-        organizationId,                     // 🆕 multi‑tenant
+        organizationId: organizationId,  // ✅ Always set this
         date: new Date()
       });
-
+  
       res.status(201).json({
         success: true,
         data: expenditure,
         message: 'Expenditure recorded successfully'
       });
     } catch (error) {
+      console.error('Error in recordExpenditure:', error);
       next(error);
     }
-  }
-
+  };
   /**
    * Auto-record payment as income (called when payment is successful)
-   * Now requires organizationId
    */
-  async recordIncomeFromPayment(paymentData) {
+  recordIncomeFromPayment = async (paymentData) => {
     try {
       const { paymentId, amount, type, userId, paymentTypeId, description, organizationId } = paymentData;
 
@@ -145,7 +170,7 @@ class TransactionController {
         userId,
         paymentTypeId,
         createdBy: userId,
-        organizationId,                     // 🆕 required
+        organizationId,
         date: new Date(),
         type: 'payment'
       });
@@ -155,63 +180,30 @@ class TransactionController {
       console.error('Error recording income from payment:', error);
       throw error;
     }
-  }
-
-  /**
-   * Get total income (including payments) – scoped to organization
-   * @route GET /api/transactions/total-income
-   * @access Private/Admin
-   */
-  async getTotalIncome(req, res, next) {
-    try {
-      const organizationId = this.getOrgId(req);
-      const orgObjectId = new mongoose.Types.ObjectId(organizationId);
-
-      const [manualIncome, paymentIncome, paymentsTotal] = await Promise.all([
-        Income.aggregate([
-          { $match: { type: 'manual', organizationId: orgObjectId } },
-          { $group: { _id: null, total: { $sum: '$amount' } } }
-        ]),
-        Income.aggregate([
-          { $match: { type: 'payment', organizationId: orgObjectId } },
-          { $group: { _id: null, total: { $sum: '$amount' } } }
-        ]),
-        Payment.aggregate([
-          { $match: { status: 'paid', organizationId: orgObjectId } },
-          { $group: { _id: null, total: { $sum: '$amount' } } }
-        ])
-      ]);
-
-      const manualTotal = manualIncome[0]?.total || 0;
-      const paymentTotal = paymentIncome[0]?.total || 0;
-      const directPaymentTotal = paymentsTotal[0]?.total || 0;
-
-      res.status(200).json({
-        success: true,
-        data: {
-          totalIncome: manualTotal + paymentTotal,
-          manualIncome: manualTotal,
-          paymentIncome: paymentTotal,
-          directPaymentTotal: directPaymentTotal,
-          discrepancy: (manualTotal + paymentTotal) - directPaymentTotal
-        }
-      });
-    } catch (error) {
-      next(error);
-    }
-  }
+  };
 
   /**
    * Get all incomes with filters (scoped to organization)
    * @route GET /api/transactions/income
    * @access Private/Admin
    */
-  async getAllIncomes(req, res, next) {
+  getAllIncomes = async (req, res, next) => {
     try {
       const organizationId = this.getOrgId(req);
+      const userRole = req.user.role;
       const { startDate, endDate, source, type, page = 1, limit = 20 } = req.query;
 
-      const query = { organizationId };
+      let query = {};
+      
+      if (userRole !== 'super-admin' && userRole !== 'super_admin') {
+        if (!organizationId) {
+          return res.status(400).json({
+            success: false,
+            message: 'Organization ID not found for this user'
+          });
+        }
+        query.organizationId = organizationId;
+      }
 
       if (startDate && endDate) {
         query.date = {
@@ -266,21 +258,33 @@ class TransactionController {
         }
       });
     } catch (error) {
+      console.error('Error in getAllIncomes:', error);
       next(error);
     }
-  }
+  };
 
   /**
    * Get all expenditures with filters (scoped to organization)
    * @route GET /api/transactions/expenditure
    * @access Private/Admin
    */
-  async getAllExpenditures(req, res, next) {
+  getAllExpenditures = async (req, res, next) => {
     try {
       const organizationId = this.getOrgId(req);
+      const userRole = req.user.role;
       const { startDate, endDate, purpose, page = 1, limit = 20 } = req.query;
 
-      const query = { organizationId };
+      let query = {};
+      
+      if (userRole !== 'super-admin' && userRole !== 'super_admin') {
+        if (!organizationId) {
+          return res.status(400).json({
+            success: false,
+            message: 'Organization ID not found for this user'
+          });
+        }
+        query.organizationId = organizationId;
+      }
 
       if (startDate && endDate) {
         query.date = {
@@ -326,22 +330,34 @@ class TransactionController {
         }
       });
     } catch (error) {
+      console.error('Error in getAllExpenditures:', error);
       next(error);
     }
-  }
+  };
 
   /**
    * Get single income record (scoped)
    * @route GET /api/transactions/income/:id
    * @access Private/Admin
    */
-  async getIncomeById(req, res, next) {
+  getIncomeById = async (req, res, next) => {
     try {
       const organizationId = this.getOrgId(req);
-      const income = await Income.findOne({
-        _id: req.params.id,
-        organizationId
-      })
+      const userRole = req.user.role;
+      
+      let query = { _id: req.params.id };
+      
+      if (userRole !== 'super-admin' && userRole !== 'super_admin') {
+        if (!organizationId) {
+          return res.status(400).json({
+            success: false,
+            message: 'Organization ID not found for this user'
+          });
+        }
+        query.organizationId = organizationId;
+      }
+
+      const income = await Income.findOne(query)
         .populate('createdBy', 'name email')
         .populate('userId', 'name email');
 
@@ -357,22 +373,35 @@ class TransactionController {
         data: income
       });
     } catch (error) {
+      console.error('Error in getIncomeById:', error);
       next(error);
     }
-  }
+  };
 
   /**
    * Get single expenditure record (scoped)
    * @route GET /api/transactions/expenditure/:id
    * @access Private/Admin
    */
-  async getExpenditureById(req, res, next) {
+  getExpenditureById = async (req, res, next) => {
     try {
       const organizationId = this.getOrgId(req);
-      const expenditure = await Expenditure.findOne({
-        _id: req.params.id,
-        organizationId
-      }).populate('createdBy', 'name email');
+      const userRole = req.user.role;
+      
+      let query = { _id: req.params.id };
+      
+      if (userRole !== 'super-admin' && userRole !== 'super_admin') {
+        if (!organizationId) {
+          return res.status(400).json({
+            success: false,
+            message: 'Organization ID not found for this user'
+          });
+        }
+        query.organizationId = organizationId;
+      }
+
+      const expenditure = await Expenditure.findOne(query)
+        .populate('createdBy', 'name email');
 
       if (!expenditure) {
         return res.status(404).json({
@@ -386,24 +415,35 @@ class TransactionController {
         data: expenditure
       });
     } catch (error) {
+      console.error('Error in getExpenditureById:', error);
       next(error);
     }
-  }
+  };
 
   /**
    * Update income record (scoped)
    * @route PUT /api/transactions/income/:id
    * @access Private/Admin
    */
-  async updateIncome(req, res, next) {
+  updateIncome = async (req, res, next) => {
     try {
       const organizationId = this.getOrgId(req);
+      const userRole = req.user.role;
       const { amount, source, description } = req.body;
 
-      const income = await Income.findOne({
-        _id: req.params.id,
-        organizationId
-      });
+      let query = { _id: req.params.id };
+      
+      if (userRole !== 'super-admin' && userRole !== 'super_admin') {
+        if (!organizationId) {
+          return res.status(400).json({
+            success: false,
+            message: 'Organization ID not found for this user'
+          });
+        }
+        query.organizationId = organizationId;
+      }
+
+      const income = await Income.findOne(query);
 
       if (!income) {
         return res.status(404).json({
@@ -412,7 +452,6 @@ class TransactionController {
         });
       }
 
-      // Don't allow editing payment-type income
       if (income.type === 'payment') {
         return res.status(400).json({
           success: false,
@@ -453,24 +492,35 @@ class TransactionController {
         message: 'Income updated successfully'
       });
     } catch (error) {
+      console.error('Error in updateIncome:', error);
       next(error);
     }
-  }
+  };
 
   /**
    * Update expenditure record (scoped)
    * @route PUT /api/transactions/expenditure/:id
    * @access Private/Admin
    */
-  async updateExpenditure(req, res, next) {
+  updateExpenditure = async (req, res, next) => {
     try {
       const organizationId = this.getOrgId(req);
+      const userRole = req.user.role;
       const { amount, purpose, description, receipt } = req.body;
 
-      const expenditure = await Expenditure.findOne({
-        _id: req.params.id,
-        organizationId
-      });
+      let query = { _id: req.params.id };
+      
+      if (userRole !== 'super-admin' && userRole !== 'super_admin') {
+        if (!organizationId) {
+          return res.status(400).json({
+            success: false,
+            message: 'Organization ID not found for this user'
+          });
+        }
+        query.organizationId = organizationId;
+      }
+
+      const expenditure = await Expenditure.findOne(query);
 
       if (!expenditure) {
         return res.status(404).json({
@@ -537,22 +587,34 @@ class TransactionController {
         message: 'Expenditure updated successfully'
       });
     } catch (error) {
+      console.error('Error in updateExpenditure:', error);
       next(error);
     }
-  }
+  };
 
   /**
    * Delete income record (scoped)
    * @route DELETE /api/transactions/income/:id
    * @access Private/Admin
    */
-  async deleteIncome(req, res, next) {
+  deleteIncome = async (req, res, next) => {
     try {
       const organizationId = this.getOrgId(req);
-      const income = await Income.findOne({
-        _id: req.params.id,
-        organizationId
-      });
+      const userRole = req.user.role;
+      
+      let query = { _id: req.params.id };
+      
+      if (userRole !== 'super-admin' && userRole !== 'super_admin') {
+        if (!organizationId) {
+          return res.status(400).json({
+            success: false,
+            message: 'Organization ID not found for this user'
+          });
+        }
+        query.organizationId = organizationId;
+      }
+
+      const income = await Income.findOne(query);
 
       if (!income) {
         return res.status(404).json({
@@ -575,22 +637,34 @@ class TransactionController {
         message: 'Income deleted successfully'
       });
     } catch (error) {
+      console.error('Error in deleteIncome:', error);
       next(error);
     }
-  }
+  };
 
   /**
    * Delete expenditure record (scoped)
    * @route DELETE /api/transactions/expenditure/:id
    * @access Private/Admin
    */
-  async deleteExpenditure(req, res, next) {
+  deleteExpenditure = async (req, res, next) => {
     try {
       const organizationId = this.getOrgId(req);
-      const expenditure = await Expenditure.findOneAndDelete({
-        _id: req.params.id,
-        organizationId
-      });
+      const userRole = req.user.role;
+      
+      let query = { _id: req.params.id };
+      
+      if (userRole !== 'super-admin' && userRole !== 'super_admin') {
+        if (!organizationId) {
+          return res.status(400).json({
+            success: false,
+            message: 'Organization ID not found for this user'
+          });
+        }
+        query.organizationId = organizationId;
+      }
+
+      const expenditure = await Expenditure.findOne(query);
 
       if (!expenditure) {
         return res.status(404).json({
@@ -599,36 +673,60 @@ class TransactionController {
         });
       }
 
+      await expenditure.deleteOne();
+
       res.status(200).json({
         success: true,
         message: 'Expenditure deleted successfully'
       });
     } catch (error) {
+      console.error('Error in deleteExpenditure:', error);
       next(error);
     }
-  }
+  };
 
   /**
    * Get transaction summary for dashboard (scoped)
    * @route GET /api/transactions/summary
    * @access Private
    */
-  async getTransactionSummary(req, res, next) {
+  getTransactionSummary = async (req, res, next) => {
     try {
       const organizationId = this.getOrgId(req);
-      const orgObjectId = new mongoose.Types.ObjectId(organizationId);
+      const userRole = req.user.role;
+      
+      if (userRole !== 'super-admin' && userRole !== 'super_admin') {
+        if (!organizationId) {
+          return res.status(400).json({
+            success: false,
+            message: 'Organization ID not found for this user'
+          });
+        }
+      }
+
+      const orgObjectId = organizationId ? new mongoose.Types.ObjectId(organizationId) : null;
+      
+      let incomeMatch = {};
+      let expenditureMatch = {};
+      let paymentMatch = {};
+      
+      if (orgObjectId) {
+        incomeMatch = { organizationId: orgObjectId };
+        expenditureMatch = { organizationId: orgObjectId };
+        paymentMatch = { organizationId: orgObjectId };
+      }
 
       const [totalIncome, totalExpenditure, recentPayments, incomeCount, expenditureCount, incomeByType] = await Promise.all([
-        Income.aggregate([{ $match: { organizationId: orgObjectId } }, { $group: { _id: null, total: { $sum: '$amount' } } }]),
-        Expenditure.aggregate([{ $match: { organizationId: orgObjectId } }, { $group: { _id: null, total: { $sum: '$amount' } } }]),
-        Payment.find({ status: 'paid', organizationId })
+        Income.aggregate([{ $match: incomeMatch }, { $group: { _id: null, total: { $sum: '$amount' } } }]),
+        Expenditure.aggregate([{ $match: expenditureMatch }, { $group: { _id: null, total: { $sum: '$amount' } } }]),
+        Payment.find({ ...paymentMatch, status: 'paid' })
           .sort({ paidAt: -1 })
           .limit(5)
-          .populate('userId', 'name email'),
-        Income.countDocuments({ organizationId }),
-        Expenditure.countDocuments({ organizationId }),
+          .populate('user', 'name email'),
+        Income.countDocuments(incomeMatch),
+        Expenditure.countDocuments(expenditureMatch),
         Income.aggregate([
-          { $match: { organizationId: orgObjectId } },
+          { $match: incomeMatch },
           {
             $group: {
               _id: '$type',
@@ -647,7 +745,7 @@ class TransactionController {
       sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
 
       const monthlyIncome = await Income.aggregate([
-        { $match: { organizationId: orgObjectId, date: { $gte: sixMonthsAgo } } },
+        { $match: { ...incomeMatch, date: { $gte: sixMonthsAgo } } },
         {
           $group: {
             _id: { year: { $year: '$date' }, month: { $month: '$date' } },
@@ -658,7 +756,7 @@ class TransactionController {
       ]);
 
       const monthlyExpenditure = await Expenditure.aggregate([
-        { $match: { organizationId: orgObjectId, date: { $gte: sixMonthsAgo } } },
+        { $match: { ...expenditureMatch, date: { $gte: sixMonthsAgo } } },
         {
           $group: {
             _id: { year: { $year: '$date' }, month: { $month: '$date' } },
@@ -687,25 +785,38 @@ class TransactionController {
         }
       });
     } catch (error) {
+      console.error('Error in getTransactionSummary:', error);
       next(error);
     }
-  }
+  };
 
   /**
    * Get current balance (scoped)
    * @route GET /api/transactions/balance
    * @access Private/Admin
    */
-  async getBalance(req, res, next) {
+  getBalance = async (req, res, next) => {
     try {
       const organizationId = this.getOrgId(req);
-      const orgObjectId = new mongoose.Types.ObjectId(organizationId);
+      const userRole = req.user.role;
+      
+      let matchCondition = {};
+      
+      if (userRole !== 'super-admin' && userRole !== 'super_admin') {
+        if (!organizationId) {
+          return res.status(400).json({
+            success: false,
+            message: 'Organization ID not found for this user'
+          });
+        }
+        matchCondition = { organizationId: new mongoose.Types.ObjectId(organizationId) };
+      }
 
       const [totalIncome, totalExpenditure, paymentsTotal] = await Promise.all([
-        Income.aggregate([{ $match: { organizationId: orgObjectId } }, { $group: { _id: null, total: { $sum: '$amount' } } }]),
-        Expenditure.aggregate([{ $match: { organizationId: orgObjectId } }, { $group: { _id: null, total: { $sum: '$amount' } } }]),
+        Income.aggregate([{ $match: matchCondition }, { $group: { _id: null, total: { $sum: '$amount' } } }]),
+        Expenditure.aggregate([{ $match: matchCondition }, { $group: { _id: null, total: { $sum: '$amount' } } }]),
         Payment.aggregate([
-          { $match: { status: 'paid', organizationId: orgObjectId } },
+          { $match: { ...matchCondition, status: 'paid' } },
           { $group: { _id: null, total: { $sum: '$amount' } } }
         ])
       ]);
@@ -725,140 +836,255 @@ class TransactionController {
         }
       });
     } catch (error) {
+      console.error('Error in getBalance:', error);
       next(error);
     }
-  }
+  };
+
+  /**
+   * Get total income (including payments) – scoped to organization
+   * @route GET /api/transactions/total-income
+   * @access Private/Admin
+   */
+  getTotalIncome = async (req, res, next) => {
+    try {
+      const organizationId = this.getOrgId(req);
+      const userRole = req.user.role;
+      
+      let matchCondition = {};
+      
+      if (userRole !== 'super-admin' && userRole !== 'super_admin') {
+        if (!organizationId) {
+          return res.status(400).json({
+            success: false,
+            message: 'Organization ID not found for this user'
+          });
+        }
+        matchCondition = { organizationId: new mongoose.Types.ObjectId(organizationId) };
+      }
+
+      const [manualIncome, paymentIncome, paymentsTotal] = await Promise.all([
+        Income.aggregate([
+          { $match: { ...matchCondition, type: 'manual' } },
+          { $group: { _id: null, total: { $sum: '$amount' } } }
+        ]),
+        Income.aggregate([
+          { $match: { ...matchCondition, type: 'payment' } },
+          { $group: { _id: null, total: { $sum: '$amount' } } }
+        ]),
+        Payment.aggregate([
+          { $match: { ...matchCondition, status: 'paid' } },
+          { $group: { _id: null, total: { $sum: '$amount' } } }
+        ])
+      ]);
+
+      const manualTotal = manualIncome[0]?.total || 0;
+      const paymentTotal = paymentIncome[0]?.total || 0;
+      const directPaymentTotal = paymentsTotal[0]?.total || 0;
+
+      res.status(200).json({
+        success: true,
+        data: {
+          totalIncome: manualTotal + paymentTotal,
+          manualIncome: manualTotal,
+          paymentIncome: paymentTotal,
+          directPaymentTotal: directPaymentTotal,
+          discrepancy: (manualTotal + paymentTotal) - directPaymentTotal
+        }
+      });
+    } catch (error) {
+      console.error('Error in getTotalIncome:', error);
+      next(error);
+    }
+  };
 
   /**
    * Get all income records for public/member viewing (Read-only, scoped)
    * @route GET /api/transactions/income/public
    * @access Private (Authenticated users)
    */
-  async getAllIncomesPublic(req, res, next) {
-    try {
-      const organizationId = this.getOrgId(req);
-      const { startDate, endDate, page = 1, limit = 50 } = req.query;
+  a/**
+ * Get all income records for public/member viewing (Read-only, scoped)
+ * @route GET /api/transactions/income/public
+ * @access Private (Authenticated users)
+ */
+async getAllIncomesPublic(req, res, next) {
+  try {
+    const organizationId = req.user.organizationId;
+    const userRole = req.user.role;
+    const { startDate, endDate, page = 1, limit = 50 } = req.query;
 
-      const query = { organizationId };
-
-      if (startDate && endDate) {
-        query.date = {
-          $gte: new Date(startDate),
-          $lte: new Date(endDate)
-        };
+    let query = {};
+    
+    // Super admin sees all, regular users see only their organization
+    if (userRole !== 'super-admin' && userRole !== 'super_admin') {
+      if (!organizationId) {
+        return res.status(400).json({
+          success: false,
+          message: 'Organization ID not found for this user'
+        });
       }
-
-      const skip = (parseInt(page) - 1) * parseInt(limit);
-      const limitNum = parseInt(limit);
-
-      const [incomes, total, totalAmount] = await Promise.all([
-        Income.find(query)
-          .select('-createdBy -updatedBy -__v') // Exclude sensitive fields
-          .sort({ date: -1, createdAt: -1 })
-          .skip(skip)
-          .limit(limitNum),
-        Income.countDocuments(query),
-        Income.aggregate([
-          { $match: query },
-          { $group: { _id: null, total: { $sum: '$amount' } } }
-        ])
-      ]);
-
-      res.status(200).json({
-        success: true,
-        data: {
-          records: incomes,
-          summary: {
-            total: totalAmount[0]?.total || 0,
-            count: total
-          },
-          pagination: {
-            page: parseInt(page),
-            limit: limitNum,
-            total,
-            pages: Math.ceil(total / limitNum)
-          }
-        }
-      });
-    } catch (error) {
-      next(error);
+      query.organizationId = organizationId;
     }
-  }
 
-  /**
-   * Get all expenditure records for public/member viewing (Read-only, scoped)
-   * @route GET /api/transactions/expenditure/public
-   * @access Private (Authenticated users)
-   */
-  async getAllExpendituresPublic(req, res, next) {
-    try {
-      const organizationId = this.getOrgId(req);
-      const { startDate, endDate, page = 1, limit = 50 } = req.query;
+    // FIXED: Use createdAt instead of date
+    if (startDate && endDate) {
+      query.createdAt = {
+        $gte: new Date(startDate),
+        $lte: new Date(endDate)
+      };
+    }
 
-      const query = { organizationId };
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+    const limitNum = parseInt(limit);
 
-      if (startDate && endDate) {
-        query.date = {
-          $gte: new Date(startDate),
-          $lte: new Date(endDate)
-        };
+    const [incomes, total, totalAmount] = await Promise.all([
+      Income.find(query)
+        .select('-createdBy -updatedBy -__v')
+        .sort({ createdAt: -1 })  // FIXED: Use createdAt instead of date
+        .skip(skip)
+        .limit(limitNum)
+        .lean(),
+      Income.countDocuments(query),
+      Income.aggregate([
+        { $match: query },
+        { $group: { _id: null, total: { $sum: '$amount' } } }
+      ])
+    ]);
+
+    console.log(`Found ${incomes.length} income records for organization ${organizationId}`);
+
+    res.status(200).json({
+      success: true,
+      data: {
+        records: incomes,  // ← Wrap in records property
+        summary: {
+          total: totalAmount[0]?.total || 0,
+          count: total
+        },
+        pagination: {
+          page: parseInt(page),
+          limit: limitNum,
+          total,
+          pages: Math.ceil(total / limitNum)
+        }
       }
-
-      const skip = (parseInt(page) - 1) * parseInt(limit);
-      const limitNum = parseInt(limit);
-
-      const [expenditures, total, totalAmount] = await Promise.all([
-        Expenditure.find(query)
-          .select('-createdBy -updatedBy -__v -receipt') // Exclude sensitive fields
-          .sort({ date: -1, createdAt: -1 })
-          .skip(skip)
-          .limit(limitNum),
-        Expenditure.countDocuments(query),
-        Expenditure.aggregate([
-          { $match: query },
-          { $group: { _id: null, total: { $sum: '$amount' } } }
-        ])
-      ]);
-
-      res.status(200).json({
-        success: true,
-        data: {
-          records: expenditures,
-          summary: {
-            total: totalAmount[0]?.total || 0,
-            count: total
-          },
-          pagination: {
-            page: parseInt(page),
-            limit: limitNum,
-            total,
-            pages: Math.ceil(total / limitNum)
-          }
-        }
-      });
-    } catch (error) {
-      next(error);
-    }
+    });
+  } catch (error) {
+    console.error('Error in getAllIncomesPublic:', error);
+    next(error);
   }
+}
+  
+
+
+ // Update getAllExpendituresPublic method
+/**
+ * Get all expenditure records for public/member viewing (Read-only, scoped)
+ * @route GET /api/transactions/expenditure/public
+ * @access Private (Authenticated users)
+ */
+async getAllExpendituresPublic(req, res, next) {
+  try {
+    const organizationId = req.user.organizationId;
+    const userRole = req.user.role;
+    const { startDate, endDate, page = 1, limit = 50 } = req.query;
+
+    let query = {};
+    
+    // Super admin sees all, regular users see only their organization
+    if (userRole !== 'super-admin' && userRole !== 'super_admin') {
+      if (!organizationId) {
+        return res.status(400).json({
+          success: false,
+          message: 'Organization ID not found for this user'
+        });
+      }
+      query.organizationId = organizationId;
+    }
+
+    // FIXED: Use createdAt instead of date
+    if (startDate && endDate) {
+      query.createdAt = {
+        $gte: new Date(startDate),
+        $lte: new Date(endDate)
+      };
+    }
+
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+    const limitNum = parseInt(limit);
+
+    const [expenditures, total, totalAmount] = await Promise.all([
+      Expenditure.find(query)
+        .select('-createdBy -updatedBy -__v -receipt')
+        .sort({ createdAt: -1 })  // FIXED: Use createdAt instead of date
+        .skip(skip)
+        .limit(limitNum)
+        .lean(),
+      Expenditure.countDocuments(query),
+      Expenditure.aggregate([
+        { $match: query },
+        { $group: { _id: null, total: { $sum: '$amount' } } }
+      ])
+    ]);
+
+    console.log(`Found ${expenditures.length} expenditure records for organization ${organizationId}`);
+
+    res.status(200).json({
+      success: true,
+      data: {
+        records: expenditures,
+        summary: {
+          total: totalAmount[0]?.total || 0,
+          count: total
+        },
+        pagination: {
+          page: parseInt(page),
+          limit: limitNum,
+          total,
+          pages: Math.ceil(total / limitNum)
+        }
+      }
+    });
+  } catch (error) {
+    console.error('Error in getAllExpendituresPublic:', error);
+    next(error);
+  }
+}
 
   /**
    * Get recent transactions (scoped)
    * @route GET /api/transactions/recent
    * @access Private/Admin
    */
-  async getRecentTransactions(req, res, next) {
+  getRecentTransactions = async (req, res, next) => {
     try {
       const organizationId = this.getOrgId(req);
+      const userRole = req.user.role;
       const { limit = 10 } = req.query;
       const limitNum = parseInt(limit);
 
+      let incomeQuery = {};
+      let expenditureQuery = {};
+      
+      if (userRole !== 'super-admin' && userRole !== 'super_admin') {
+        if (!organizationId) {
+          return res.status(400).json({
+            success: false,
+            message: 'Organization ID not found for this user'
+          });
+        }
+        incomeQuery = { organizationId };
+        expenditureQuery = { organizationId };
+      }
+
       const [incomes, expenditures] = await Promise.all([
-        Income.find({ organizationId })
+        Income.find(incomeQuery)
           .sort({ createdAt: -1 })
           .limit(limitNum)
           .populate('createdBy', 'name')
           .populate('userId', 'name'),
-        Expenditure.find({ organizationId })
+        Expenditure.find(expenditureQuery)
           .sort({ createdAt: -1 })
           .limit(limitNum)
           .populate('createdBy', 'name')
@@ -896,9 +1122,11 @@ class TransactionController {
         data: transactions.slice(0, limitNum)
       });
     } catch (error) {
+      console.error('Error in getRecentTransactions:', error);
       next(error);
     }
-  }
+  };
 }
 
+// Export using arrow function class properties
 module.exports = new TransactionController();

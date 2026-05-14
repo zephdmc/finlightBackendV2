@@ -23,26 +23,53 @@ const userSchema = new mongoose.Schema({
   },
   role: {
     type: String,
-    enum: [ 'super_admin','admin', 'member'],
+    enum: ['super-admin', 'super_admin', 'admin', 'member'],
     default: 'member'
   },
   organizationId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Organization',
-    required: [true, 'Organization ID is required']
+    // organizationId is NOT required for super admins
+    required: function() {
+      // Only require organizationId for non-super-admin users
+      return this.role !== 'super-admin' && this.role !== 'super_admin';
+    }
+  },
+  hasPaidRegistration: {
+    type: Boolean,
+    default: true
+  },
+  isActive: {
+    type: Boolean,
+    default: true
   },
   createdAt: {
+    type: Date,
+    default: Date.now
+  },
+  updatedAt: {
     type: Date,
     default: Date.now
   }
 });
 
-// Compound index for unique email per organization (optional but recommended)
-// Because email might be same across different orgs (e.g., john@doe.com in Org A and Org B)
-userSchema.index({ email: 1, organizationId: 1 }, { unique: true });
+// Compound index for unique email per organization (only for non-super-admin)
+// Super admins have null organizationId, so this ensures email uniqueness across orgs
+userSchema.index({ email: 1, organizationId: 1 }, { 
+  unique: true,
+  partialFilterExpression: { organizationId: { $exists: true, $ne: null } }
+});
 
 // Index for faster tenant-based queries
 userSchema.index({ organizationId: 1 });
+userSchema.index({ role: 1 });
+userSchema.index({ createdAt: -1 });
+
+// Update updatedAt timestamp on save
+userSchema.pre('save', function(next) {
+  this.updatedAt = Date.now();
+  next();
+});
 
 // Hash password before saving
 userSchema.pre('save', async function(next) {

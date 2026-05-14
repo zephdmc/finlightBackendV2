@@ -364,55 +364,76 @@ class PaymentService {
    * @param {Object} filters - Filter options
    * @returns {Promise<Object>} - Payments data
    */
-  async getAllPayments(organizationId, filters = {}) {
-    const { status, type, userId, startDate, endDate, page = 1, limit = 20 } = filters;
+ // backend/src/services/paymentService.js - Update getAllPayments method
 
-    const query = { organizationId };
-    if (status) query.status = status;
-    if (type) query.type = type;
-    if (userId) query.user = userId;
-    if (startDate && endDate) {
-      query.createdAt = {
-        $gte: new Date(startDate),
-        $lte: new Date(endDate)
-      };
+async getAllPayments(filters = {}) {
+  const { status, type, userId, startDate, endDate, page = 1, limit = 20 } = filters;
+  
+  // Get organizationId from the authenticated user (passed via req.user)
+  // This should be passed from the controller
+  const organizationId = filters.organizationId;
+  const userRole = filters.userRole;
+  
+  const query = {};
+  
+  // Super admin sees all, regular admin sees only their organization
+  if (userRole !== 'super-admin' && userRole !== 'super_admin') {
+    if (!organizationId) {
+      throw new Error('Organization ID required for non-super-admin users');
     }
-
-    const skip = (parseInt(page) - 1) * parseInt(limit);
-
-    const [payments, total] = await Promise.all([
-      Payment.find(query)
-        .populate('user', 'name email')
-        .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(parseInt(limit)),
-      Payment.countDocuments(query)
-    ]);
-
-    const totals = await Payment.aggregate([
-      { $match: query },
-      { $group: { _id: '$status', total: { $sum: '$amount' }, count: { $sum: 1 } } }
-    ]);
-
-    const paidTotal = totals.find(t => t._id === 'paid')?.total || 0;
-    const unpaidTotal = totals.find(t => t._id === 'unpaid')?.total || 0;
-
-    return {
-      records: payments,
-      summary: {
-        totalPaid: paidTotal,
-        totalUnpaid: unpaidTotal,
-        totalPayments: paidTotal + unpaidTotal,
-        count: total
-      },
-      pagination: {
-        page: parseInt(page),
-        limit: parseInt(limit),
-        total,
-        pages: Math.ceil(total / parseInt(limit))
-      }
+    query.organizationId = organizationId;
+  }
+  
+  if (status) query.status = status;
+  if (type) query.type = type;
+  if (userId) query.user = userId;
+  if (startDate && endDate) {
+    query.createdAt = {
+      $gte: new Date(startDate),
+      $lte: new Date(endDate)
     };
   }
+  
+  const skip = (parseInt(page) - 1) * parseInt(limit);
+  
+  const [payments, total] = await Promise.all([
+    Payment.find(query)
+      .populate('user', 'name email')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(parseInt(limit)),
+    Payment.countDocuments(query)
+  ]);
+  
+  // Calculate totals
+  const totals = await Payment.aggregate([
+    { $match: query },
+    { $group: {
+      _id: '$status',
+      total: { $sum: '$amount' },
+      count: { $sum: 1 }
+    }}
+  ]);
+  
+  const paidTotal = totals.find(t => t._id === 'paid')?.total || 0;
+  const unpaidTotal = totals.find(t => t._id === 'unpaid')?.total || 0;
+  
+  return {
+    records: payments,
+    summary: {
+      totalPaid: paidTotal,
+      totalUnpaid: unpaidTotal,
+      totalPayments: paidTotal + unpaidTotal,
+      count: total
+    },
+    pagination: {
+      page: parseInt(page),
+      limit: parseInt(limit),
+      total,
+      pages: Math.ceil(total / parseInt(limit))
+    }
+  };
+}
 
   /**
    * Get outstanding payments for a user (scoped)

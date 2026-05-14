@@ -4,7 +4,7 @@ const Payment = require('../models/Payment');
 const Organization = require('../models/Organization'); // 🆕
 const jwt = require('jsonwebtoken');
 const { validationResult } = require('express-validator');
-
+const mongoose = require('mongoose');
 // Generate JWT Token (now includes organizationId)
 const generateToken = (user) => {
   return jwt.sign(
@@ -188,57 +188,86 @@ exports.login = async (req, res, next) => {
  * @access  Public
  */
 exports.signupWithOrg = async (req, res, next) => {
-  const session = await mongoose.startSession();
-  session.startTransaction();
-
   try {
     const { orgName, adminName, adminEmail, adminPassword } = req.body;
 
     // 1. Validate input
     if (!orgName || !adminName || !adminEmail || !adminPassword) {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(400).json({ success: false, message: 'All fields are required' });
+      return res.status(400).json({ 
+        success: false, 
+        message: 'All fields are required' 
+      });
     }
+    
     if (adminPassword.length < 6) {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(400).json({ success: false, message: 'Password must be at least 6 characters' });
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Password must be at least 6 characters' 
+      });
     }
 
-    // 2. Generate slug from org name (e.g., "AGFMA" -> "agfma")
+    // 2. Generate slug from org name
     const slug = orgName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
 
     // 3. Check if organization slug already exists
-    const existingOrg = await Organization.findOne({ slug }).session(session);
+    const existingOrg = await Organization.findOne({ slug });
     if (existingOrg) {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(400).json({ success: false, message: 'Organization name already taken' });
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Organization name already taken. Please choose another name.' 
+      });
     }
 
-    // 4. Create the organization (paystack subaccount can be added later)
-    const [organization] = await Organization.create([{
+    // 4. Check if email is already used (globally - for security)
+    const existingUser = await User.findOne({ email: adminEmail });
+    if (existingUser) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'This email is already registered. Please use a different email or login.' 
+      });
+    }
+
+    // 5. Create the organization
+    const organization = await Organization.create({
       name: orgName,
       slug,
-      paystack: { subaccountCode: '', bankName: '', accountNumber: '', percentageCharge: 0 }
-    }], { session });
+      paystack: { 
+        subaccountCode: '', 
+        bankName: '', 
+        accountNumber: '', 
+        percentageCharge: 0 
+      },
+      status: 'active',
+      settings: {
+        registrationFee: 500,
+        currency: 'NGN',
+        timezone: 'Africa/Lagos'
+      },
+      createdAt: new Date(),
+      updatedAt: new Date()
+    });
 
-    // 5. Create the admin user – the User model's pre-save will hash the password automatically
-    const [user] = await User.create([{
+    // 6. Create the admin user
+    const user = await User.create({
       name: adminName,
       email: adminEmail,
-      password: adminPassword,   // plain text – model hook will hash it
+      password: adminPassword,
       role: 'admin',
-      organizationId: organization._id
-    }], { session });
+      organizationId: organization._id,
+      hasPaidRegistration: true,
+      hasCompletedRegistration: true,
+      isActive: true,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    });
 
-    await session.commitTransaction();
-    session.endSession();
-
-    // 6. Generate JWT token (include organizationId)
+    // 7. Generate JWT token
     const token = jwt.sign(
-      { id: user._id, organizationId: organization._id, role: 'admin' },
+      { 
+        id: user._id, 
+        organizationId: organization._id, 
+        role: 'admin' 
+      },
       process.env.JWT_SECRET,
       { expiresIn: process.env.JWT_EXPIRE || '7d' }
     );
@@ -251,17 +280,212 @@ exports.signupWithOrg = async (req, res, next) => {
         name: user.name,
         email: user.email,
         role: user.role,
-        organizationId: organization._id
+        organizationId: organization._id,
+        hasPaidRegistration: true
       },
       organization: {
         id: organization._id,
         name: organization.name,
         slug: organization.slug
-      }
+      },
+      message: 'Organization created successfully! Welcome to FinLight.'
     });
   } catch (error) {
-    await session.abortTransaction();
-    session.endSession();
+    console.error('Signup error:', error);
+    
+    // Handle duplicate key error
+    if (error.code === 11000) {
+      if (error.keyPattern?.slug) {
+        return res.status(400).json({
+          success: false,
+          message: 'Organization name already taken. Please choose another name.'
+        });
+      }
+      if (error.keyPattern?.email) {
+        return res.status(400).json({
+          success: false,
+          message: 'Email already registered. Please use a different email.'
+        });
+      }
+    }
+    
+    next(error);
+  }
+};
+
+
+
+// Add to your authController.js
+
+/**
+ * @desc    Request password reset
+ * @route   POST /api/auth/forgot-password
+ * @access  Public
+ */
+exports.forgotPassword = async (req, res, next) => {
+  try {
+    const authService = require('../services/authService');
+    const resetData = await authService.requestPasswordReset(req.body.email);
+    
+    res.status(200).json({
+      success: true,
+      message: 'If an account exists with this email, you will receive a password reset link.',
+      ...(process.env.NODE_ENV === 'development' && { resetToken: resetData.resetToken })
+    });
+  } catch (error) {
+    // Don't reveal if email exists or not for security
+    console.error('Password reset request error:', error.message);
+    res.status(200).json({
+      success: true,
+      message: 'If an account exists with this email, you will receive a password reset link.'
+    });
+  }
+};
+
+/**
+ * @desc    Reset password with token
+ * @route   POST /api/auth/reset-password/:token
+ * @access  Public
+ */
+exports.resetPassword = async (req, res, next) => {
+  try {
+    const authService = require('../services/authService');
+    await authService.resetPassword(req.params.token, req.body.newPassword);
+    
+    res.status(200).json({
+      success: true,
+      message: 'Password reset successful. Please login with your new password.'
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * @desc    Change user password
+ * @route   POST /api/auth/change-password
+ * @access  Private
+ */
+exports.changePassword = async (req, res, next) => {
+  try {
+    const authService = require('../services/authService');
+    await authService.changePassword(
+      req.user.id,
+      req.body.currentPassword,
+      req.body.newPassword
+    );
+    
+    res.status(200).json({
+      success: true,
+      message: 'Password changed successfully. Please login again with your new password.'
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * @desc    Refresh JWT token
+ * @route   POST /api/auth/refresh-token
+ * @access  Private
+ */
+exports.refreshToken = async (req, res, next) => {
+  try {
+    const authService = require('../services/authService');
+    const result = await authService.refreshToken(req.body.token);
+    
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Pragma', 'no-cache');
+    
+    res.status(200).json({
+      success: true,
+      data: result
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * @desc    Logout user
+ * @route   POST /api/auth/logout
+ * @access  Private
+ */
+exports.logout = async (req, res, next) => {
+  try {
+    // Log logout event
+    console.log(`User logged out: ${req.user.email} from IP ${req.ip}`);
+    
+    // If using token blacklist, add token to blacklist here
+    // const token = req.headers.authorization?.split(' ')[1];
+    // await BlacklistToken.create({ token, expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000) });
+    
+    res.status(200).json({
+      success: true,
+      message: 'Logged out successfully'
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * @desc    Verify admin PIN
+ * @route   POST /api/auth/verify-admin-pin
+ * @access  Private/Admin
+ */
+exports.verifyAdminPin = async (req, res, next) => {
+  try {
+    const { pin } = req.body;
+    const adminPin = process.env.ADMIN_PIN;
+    
+    if (!adminPin && process.env.NODE_ENV === 'production') {
+      console.error('ADMIN_PIN not set in production environment');
+      return res.status(500).json({
+        success: false,
+        message: 'System configuration error'
+      });
+    }
+    
+    const validPin = adminPin || (process.env.NODE_ENV === 'development' ? '1234' : null);
+    
+    if (!validPin) {
+      return res.status(500).json({
+        success: false,
+        message: 'PIN validation not configured'
+      });
+    }
+    
+    // Track PIN attempts (you may want to use Redis or a database for this)
+    const pinAttempts = req.session?.pinAttempts || 0;
+    if (pinAttempts >= 5) {
+      return res.status(429).json({
+        success: false,
+        message: 'Too many PIN attempts. Please try again later.'
+      });
+    }
+    
+    if (pin === validPin) {
+      console.log(`Admin PIN verified by ${req.user.email} (ID: ${req.user.id})`);
+      if (req.session) req.session.pinAttempts = 0;
+      
+      res.status(200).json({
+        success: true,
+        message: 'PIN verified successfully'
+      });
+    } else {
+      if (req.session) {
+        req.session.pinAttempts = (req.session.pinAttempts || 0) + 1;
+      }
+      
+      console.warn(`Failed admin PIN attempt by ${req.user.email} (ID: ${req.user.id}) from IP ${req.ip}`);
+      
+      res.status(401).json({
+        success: false,
+        message: 'Invalid admin PIN'
+      });
+    }
+  } catch (error) {
     next(error);
   }
 };

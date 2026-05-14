@@ -7,109 +7,180 @@ const mongoose = require('mongoose');
 /**
  * User Controller - Handles all user management operations
  * Manages member registration, profile updates, and user listings
- * Now fully multi‑tenant: each user belongs to an organization.
+ * Now fully multi‑tenant: each user belongs to an organization (except super-admin)
  */
 class UserController {
   /**
    * Helper: get organizationId from authenticated user
+   * Returns null for super-admin (they have no organization restriction)
    */
   getOrgId(req) {
+    // Super admin has no organization - they manage all organizations
+    // Check for both possible role formats
+    if (!req.user) return null;
+    if (req.user.role === 'super-admin' || req.user.role === 'super_admin') {
+      return null;
+    }
     return req.user.organizationId;
   }
 
   /**
+   * Helper: check if user can access this organization's data
+   */
+  async canAccessOrg(req, organizationId) {
+    // Super admin can access any organization
+    if (req.user.role === 'super-admin' || req.user.role === 'super_admin') {
+      return true;
+    }
+    // Regular users can only access their own organization
+    return req.user.organizationId && req.user.organizationId.toString() === organizationId.toString();
+  }
+
+  /**
    * Get all users (members only for non-admin) – scoped to organization
+   * Super admin sees all users across all organizations
    * @route GET /api/users
    * @access Private
    */
-  async getAllUsers(req, res, next) {
-    try {
-      const organizationId = this.getOrgId(req);
-      const { page = 1, limit = 20, role, search } = req.query;
+  // backend/src/controllers/UserController.js - Simplified getAllUsers method
 
-      const query = { organizationId };
+async getAllUsers(req, res, next) {
+  try {
+    const userRole = req.user.role;
+    const { page = 1, limit = 20, role, search } = req.query;
 
-      // If not admin, only show members
-      if (req.user.role !== 'admin') {
+    console.log('=== getAllUsers Debug ===');
+    console.log('User Role:', userRole);
+    console.log('OrganizationId:', req.user.organizationId);
+    console.log('Query params:', { page, limit, role, search });
+
+    let query = {};
+
+    // Super admin sees all users
+    if (userRole === 'super-admin' || userRole === 'super_admin') {
+      console.log('Super admin - no organization filter');
+      if (role) query.role = role;
+    } 
+    // Regular admin sees only their organization's users
+    else {
+      const organizationId = req.user.organizationId;
+      
+      if (!organizationId) {
+        console.error('No organizationId found for admin user');
+        return res.status(400).json({
+          success: false,
+          message: 'Organization ID not found for this user'
+        });
+      }
+      
+      query.organizationId = organizationId;
+      console.log('Admin - filtering by organization:', organizationId.toString());
+      
+      // If not admin role (like member), only show members
+      if (userRole !== 'admin') {
         query.role = 'member';
       } else if (role) {
         query.role = role;
       }
-
-      // Search by name or email
-      if (search) {
-        query.$or = [
-          { name: { $regex: search, $options: 'i' } },
-          { email: { $regex: search, $options: 'i' } }
-        ];
-      }
-
-      const skip = (parseInt(page) - 1) * parseInt(limit);
-
-      const [users, total] = await Promise.all([
-        User.find(query)
-          .select('-password')
-          .sort({ createdAt: -1 })
-          .skip(skip)
-          .limit(parseInt(limit)),
-        User.countDocuments(query)
-      ]);
-
-      // Get payment status for members (scoped implicitly through user IDs)
-      const usersWithPaymentStatus = await Promise.all(
-        users.map(async (user) => {
-          if (user.role === 'member') {
-            const registrationPayment = await Payment.findOne({
-              user: user._id,
-              type: 'registration',
-              organizationId  // 🆕 ensure payment belongs to same org
-            });
-
-            return {
-              ...user.toObject(),
-              registrationStatus: registrationPayment?.status || 'unpaid'
-            };
-          }
-          return user.toObject();
-        })
-      );
-
-      res.status(200).json({
-        success: true,
-        data: {
-          records: usersWithPaymentStatus,
-          pagination: {
-            page: parseInt(page),
-            limit: parseInt(limit),
-            total,
-            pages: Math.ceil(total / parseInt(limit))
-          }
-        }
-      });
-    } catch (error) {
-      next(error);
     }
+
+    // Add search filter
+    if (search && search.trim()) {
+      query.$or = [
+        { name: { $regex: search, $options: 'i' } },
+        { email: { $regex: search, $options: 'i' } }
+      ];
+      console.log('Search query:', search);
+    }
+
+    console.log('Final query:', JSON.stringify(query, null, 2));
+
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+    const limitNum = parseInt(limit);
+
+    // Execute queries
+    const [users, total] = await Promise.all([
+      User.find(query)
+        .select('-password')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limitNum)
+        .lean(), // Use lean() for better performance
+      User.countDocuments(query)
+    ]);
+
+    console.log(`Found ${users.length} users out of ${total} total`);
+
+    // Get payment status for members (only if needed)
+    const usersWithPaymentStatus = await Promise.all(
+      users.map(async (user) => {
+        if (user.role === 'member') {
+          const paymentQuery = { user: user._id, type: 'registration' };
+          // Only filter by organization if not super admin
+          if (userRole !== 'super-admin' && userRole !== 'super_admin' && req.user.organizationId) {
+            paymentQuery.organizationId = req.user.organizationId;
+          }
+          const registrationPayment = await Payment.findOne(paymentQuery).lean();
+          
+          return {
+            ...user,
+            registrationStatus: registrationPayment?.status || 'unpaid',
+            registrationAmount: registrationPayment?.amount || 500,
+            registrationPaidAt: registrationPayment?.paidAt || null
+          };
+        }
+        return user;
+      })
+    );
+
+    res.status(200).json({
+      success: true,
+      data: {
+        records: usersWithPaymentStatus,
+        pagination: {
+          page: parseInt(page),
+          limit: limitNum,
+          total,
+          pages: Math.ceil(total / limitNum),
+          hasNext: skip + limitNum < total,
+          hasPrev: skip > 0
+        }
+      }
+    });
+  } catch (error) {
+    console.error('Error in getAllUsers DETAILS:', error);
+    console.error('Error stack:', error.stack);
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to fetch users',
+      error: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
   }
+}
 
   /**
    * Get single user by ID – scoped to organization
    * @route GET /api/users/:id
    * @access Private
    */
-  async getUserById(req, res, next) {
+  getUserById = async (req, res, next) => {
     try {
-      const organizationId = this.getOrgId(req);
       const { id } = req.params;
+      const userRole = req.user.role;
 
-      // Check authorization - user can only view themselves unless admin
-      if (req.user.role !== 'admin' && req.user.id !== id) {
-        return res.status(403).json({
-          success: false,
-          message: 'Not authorized to view this user'
-        });
+      let user;
+      if (userRole === 'super-admin' || userRole === 'super_admin') {
+        user = await User.findById(id).select('-password');
+      } else {
+        const organizationId = this.getOrgId(req);
+        if (!organizationId) {
+          return res.status(400).json({
+            success: false,
+            message: 'Organization ID not found'
+          });
+        }
+        user = await User.findOne({ _id: id, organizationId }).select('-password');
       }
-
-      const user = await User.findOne({ _id: id, organizationId }).select('-password');
 
       if (!user) {
         return res.status(404).json({
@@ -118,11 +189,20 @@ class UserController {
         });
       }
 
-      // Get user's payment records if member (scoped by organization)
+      if (userRole !== 'super-admin' && userRole !== 'super_admin' && userRole !== 'admin' && req.user.id !== id) {
+        return res.status(403).json({
+          success: false,
+          message: 'Not authorized to view this user'
+        });
+      }
+
       let payments = [];
       if (user.role === 'member') {
-        payments = await Payment.find({ user: user._id, organizationId })
-          .sort({ createdAt: -1 });
+        const paymentQuery = { user: user._id };
+        if (userRole !== 'super-admin' && userRole !== 'super_admin' && req.user.organizationId) {
+          paymentQuery.organizationId = req.user.organizationId;
+        }
+        payments = await Payment.find(paymentQuery).sort({ createdAt: -1 });
       }
 
       res.status(200).json({
@@ -133,68 +213,92 @@ class UserController {
         }
       });
     } catch (error) {
+      console.error('Error in getUserById:', error);
       next(error);
     }
-  }
+  };
+
 
   /**
    * Register new member (Admin only) – scoped to organization
    * @route POST /api/users/register
    * @access Private/Admin
    */
-  async registerMember(req, res, next) {
-    try {
-      const organizationId = this.getOrgId(req);
-      const { name, email, password, role = 'member' } = req.body;
-
-      // Check if user exists within the same organization
-      const existingUser = await User.findOne({ email, organizationId });
-      if (existingUser) {
-        return res.status(400).json({
-          success: false,
-          message: 'User with this email already exists in your organization'
-        });
-      }
-
-      // Create user
-      const user = await User.create({
-        name,
-        email,
-        password,
-        role,
-        organizationId   // 🆕 assign to current organization
+  /**
+ * Register new member (Admin only) – scoped to organization
+ * @route POST /api/users/register
+ * @access Private/Admin
+ */
+registerMember = async (req, res, next) => {
+  try {
+    const userRole = req.user.role;
+    
+    if (userRole === 'super-admin' || userRole === 'super_admin') {
+      return res.status(400).json({
+        success: false,
+        message: 'Super admin cannot create members directly. Please use the organization creation endpoint.'
       });
-
-      // If member, create registration payment record (scoped)
-      if (role === 'member') {
-        await Payment.create({
-          user: user._id,
-          type: 'registration',
-          amount: 500, // Registration fee
-          status: 'unpaid',
-          dueDate: new Date(),
-          description: 'Registration fee for new member',
-          organizationId
-        });
-      }
-
-      res.status(201).json({
-        success: true,
-        data: {
-          user: {
-            id: user._id,
-            name: user.name,
-            email: user.email,
-            role: user.role
-          }
-        },
-        message: 'Member registered successfully'
-      });
-    } catch (error) {
-      console.error('Registration error:', error);
-      next(error);
     }
+
+    const organizationId = this.getOrgId(req);
+    const { name, email, password, role = 'member' } = req.body;
+
+    if (!organizationId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Organization ID not found for this admin user'
+      });
+    }
+
+    // Check if user exists within the same organization
+    const existingUser = await User.findOne({ email, organizationId });
+    if (existingUser) {
+      return res.status(400).json({
+        success: false,
+        message: 'User with this email already exists in your organization'
+      });
+    }
+
+    // Create user
+    const user = await User.create({
+      name,
+      email,
+      password,
+      role,
+      organizationId
+    });
+
+    // If member, create registration payment record
+    if (role === 'member') {
+      await Payment.create({
+        user: user._id,
+        name: `${name} - Registration Fee`,  // ✅ FIXED: Added name field
+        type: 'registration',
+        amount: 500,
+        status: 'unpaid',
+        dueDate: new Date(),
+        description: 'Registration fee for new member',
+        organizationId
+      });
+    }
+
+    res.status(201).json({
+      success: true,
+      data: {
+        user: {
+          id: user._id,
+          name: user.name,
+          email: user.email,
+          role: user.role
+        }
+      },
+      message: 'Member registered successfully'
+    });
+  } catch (error) {
+    console.error('Registration error:', error);
+    next(error);
   }
+};
 
   /**
    * Update user profile – scoped to organization
@@ -203,19 +307,24 @@ class UserController {
    */
   async updateUser(req, res, next) {
     try {
-      const organizationId = this.getOrgId(req);
       const { id } = req.params;
       const { name, email, password, role } = req.body;
+      const userRole = req.user.role;
 
-      // Check authorization
-      if (req.user.role !== 'admin' && req.user.id !== id) {
-        return res.status(403).json({
-          success: false,
-          message: 'Not authorized to update this user'
-        });
+      let user;
+      
+      if (userRole === 'super-admin' || userRole === 'super_admin') {
+        user = await User.findById(id);
+      } else {
+        const organizationId = req.user.organizationId;
+        if (!organizationId) {
+          return res.status(400).json({
+            success: false,
+            message: 'Organization ID not found'
+          });
+        }
+        user = await User.findOne({ _id: id, organizationId });
       }
-
-      const user = await User.findOne({ _id: id, organizationId });
 
       if (!user) {
         return res.status(404).json({
@@ -224,44 +333,46 @@ class UserController {
         });
       }
 
-      // Update fields
-      if (name) user.name = name;
-      if (email && req.user.role === 'admin') user.email = email;
-      if (role && req.user.role === 'admin') user.role = role;
-      if (password) {
-        user.password = password; // model's pre-save will hash it
+      if (userRole !== 'super-admin' && userRole !== 'super_admin' && userRole !== 'admin' && req.user.id !== id) {
+        return res.status(403).json({
+          success: false,
+          message: 'Not authorized to update this user'
+        });
       }
+
+      if (name) user.name = name;
+      if (email && (userRole === 'admin' || userRole === 'super-admin' || userRole === 'super_admin')) user.email = email;
+      if (role && (userRole === 'admin' || userRole === 'super-admin' || userRole === 'super_admin')) user.role = role;
+      if (password) user.password = password;
 
       await user.save();
 
-      const userResponse = {
-        id: user._id,
-        name: user.name,
-        email: user.email,
-        role: user.role
-      };
-
       res.status(200).json({
         success: true,
-        data: userResponse,
+        data: {
+          id: user._id,
+          name: user.name,
+          email: user.email,
+          role: user.role
+        },
         message: 'User updated successfully'
       });
     } catch (error) {
+      console.error('Error in updateUser:', error);
       next(error);
     }
   }
 
   /**
-   * Delete user (Admin only) – scoped to organization
+   * Delete user – scoped to organization
    * @route DELETE /api/users/:id
    * @access Private/Admin
    */
   async deleteUser(req, res, next) {
     try {
-      const organizationId = this.getOrgId(req);
       const { id } = req.params;
+      const userRole = req.user.role;
 
-      // Prevent admin from deleting themselves
       if (req.user.id === id) {
         return res.status(400).json({
           success: false,
@@ -269,7 +380,20 @@ class UserController {
         });
       }
 
-      const user = await User.findOne({ _id: id, organizationId });
+      let user;
+      
+      if (userRole === 'super-admin' || userRole === 'super_admin') {
+        user = await User.findById(id);
+      } else {
+        const organizationId = req.user.organizationId;
+        if (!organizationId) {
+          return res.status(400).json({
+            success: false,
+            message: 'Organization ID not found'
+          });
+        }
+        user = await User.findOne({ _id: id, organizationId });
+      }
 
       if (!user) {
         return res.status(404).json({
@@ -278,33 +402,57 @@ class UserController {
         });
       }
 
-      // Delete user and associated payments (scoped)
+      if (user.role === 'super-admin' || user.role === 'super_admin') {
+        return res.status(400).json({
+          success: false,
+          message: 'Cannot delete super admin account'
+        });
+      }
+
       await User.findByIdAndDelete(id);
-      await Payment.deleteMany({ user: id, organizationId });
+      await Payment.deleteMany({ user: id });
 
       res.status(200).json({
         success: true,
         message: 'User deleted successfully'
       });
     } catch (error) {
+      console.error('Error in deleteUser:', error);
       next(error);
     }
   }
 
   /**
-   * Get user statistics (Admin only) – scoped to organization
+   * Get user statistics – scoped to organization
    * @route GET /api/users/stats
    * @access Private/Admin
    */
   async getUserStats(req, res, next) {
     try {
-      const organizationId = this.getOrgId(req);
+      const userRole = req.user.role;
+      let statsQuery = {};
+      let paymentMatch = { type: 'registration' };
+      
+      if (userRole === 'super-admin' || userRole === 'super_admin') {
+        statsQuery = {};
+        paymentMatch = { type: 'registration' };
+      } else {
+        const organizationId = req.user.organizationId;
+        if (!organizationId) {
+          return res.status(400).json({
+            success: false,
+            message: 'Organization ID not found'
+          });
+        }
+        statsQuery = { organizationId };
+        paymentMatch = { type: 'registration', organizationId: new mongoose.Types.ObjectId(organizationId) };
+      }
 
       const [totalMembers, totalAdmins, registrationStats] = await Promise.all([
-        User.countDocuments({ role: 'member', organizationId }),
-        User.countDocuments({ role: 'admin', organizationId }),
+        User.countDocuments({ ...statsQuery, role: 'member' }),
+        User.countDocuments({ ...statsQuery, role: 'admin' }),
         Payment.aggregate([
-          { $match: { type: 'registration', organizationId: new mongoose.Types.ObjectId(organizationId) } },
+          { $match: paymentMatch },
           { $group: { _id: '$status', count: { $sum: 1 } } }
         ])
       ]);
@@ -328,6 +476,7 @@ class UserController {
         }
       });
     } catch (error) {
+      console.error('Error in getUserStats:', error);
       next(error);
     }
   }
@@ -339,7 +488,16 @@ class UserController {
    */
   async bulkImportMembers(req, res, next) {
     try {
-      const organizationId = this.getOrgId(req);
+      const userRole = req.user.role;
+      
+      if (userRole === 'super-admin' || userRole === 'super_admin') {
+        return res.status(400).json({
+          success: false,
+          message: 'Super admin cannot bulk import members. Please use the organization creation endpoint.'
+        });
+      }
+
+      const organizationId = req.user.organizationId;
       const { members } = req.body;
 
       if (!members || !Array.isArray(members) || members.length === 0) {
@@ -355,23 +513,20 @@ class UserController {
         try {
           const { name, email, password = 'default123' } = memberData;
 
-          // Check if user exists within the same organization
           const existingUser = await User.findOne({ email, organizationId });
           if (existingUser) {
             results.failed.push({ email, reason: 'User already exists in this organization' });
             continue;
           }
 
-          // Create user
           const user = await User.create({
             name,
             email,
             password,
             role: 'member',
-            organizationId   // 🆕
+            organizationId
           });
 
-          // Create registration payment
           await Payment.create({
             user: user._id,
             type: 'registration',
@@ -393,20 +548,21 @@ class UserController {
         message: `Imported ${results.successful.length} members successfully, ${results.failed.length} failed`
       });
     } catch (error) {
+      console.error('Error in bulkImportMembers:', error);
       next(error);
     }
   }
 
   /**
-   * Reset user password (Admin only) – scoped to organization
+   * Reset user password – scoped to organization
    * @route POST /api/users/:id/reset-password
    * @access Private/Admin
    */
   async resetPassword(req, res, next) {
     try {
-      const organizationId = this.getOrgId(req);
       const { id } = req.params;
       const { newPassword } = req.body;
+      const userRole = req.user.role;
 
       if (!newPassword || newPassword.length < 6) {
         return res.status(400).json({
@@ -415,7 +571,20 @@ class UserController {
         });
       }
 
-      const user = await User.findOne({ _id: id, organizationId });
+      let user;
+      
+      if (userRole === 'super-admin' || userRole === 'super_admin') {
+        user = await User.findById(id);
+      } else {
+        const organizationId = req.user.organizationId;
+        if (!organizationId) {
+          return res.status(400).json({
+            success: false,
+            message: 'Organization ID not found'
+          });
+        }
+        user = await User.findOne({ _id: id, organizationId });
+      }
 
       if (!user) {
         return res.status(404).json({
@@ -432,6 +601,7 @@ class UserController {
         message: 'Password reset successfully'
       });
     } catch (error) {
+      console.error('Error in resetPassword:', error);
       next(error);
     }
   }
@@ -443,27 +613,43 @@ class UserController {
    */
   async getMemberPaymentSummary(req, res, next) {
     try {
-      const organizationId = this.getOrgId(req);
       const { id } = req.params;
+      const userRole = req.user.role;
 
-      // Check authorization
-      if (req.user.role !== 'admin' && req.user.id !== id) {
+      let user;
+      
+      if (userRole === 'super-admin' || userRole === 'super_admin') {
+        user = await User.findById(id);
+      } else {
+        const organizationId = req.user.organizationId;
+        if (!organizationId) {
+          return res.status(400).json({
+            success: false,
+            message: 'Organization ID not found'
+          });
+        }
+        user = await User.findOne({ _id: id, organizationId });
+      }
+
+      if (!user) {
+        return res.status(404).json({
+          success: false,
+          message: 'User not found'
+        });
+      }
+
+      if (userRole !== 'super-admin' && userRole !== 'super_admin' && userRole !== 'admin' && req.user.id !== id) {
         return res.status(403).json({
           success: false,
           message: 'Not authorized to view this information'
         });
       }
 
-      // Ensure user belongs to the organization
-      const user = await User.findOne({ _id: id, organizationId });
-      if (!user) {
-        return res.status(404).json({
-          success: false,
-          message: 'User not found in your organization'
-        });
+      const paymentQuery = { user: id };
+      if (userRole !== 'super-admin' && userRole !== 'super_admin' && req.user.organizationId) {
+        paymentQuery.organizationId = req.user.organizationId;
       }
-
-      const payments = await Payment.find({ user: id, organizationId });
+      const payments = await Payment.find(paymentQuery);
 
       const summary = {
         totalPaid: 0,
@@ -499,6 +685,7 @@ class UserController {
         data: summary
       });
     } catch (error) {
+      console.error('Error in getMemberPaymentSummary:', error);
       next(error);
     }
   }

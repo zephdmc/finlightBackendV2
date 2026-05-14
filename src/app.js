@@ -49,7 +49,7 @@ const hpp = require('hpp');
 const compression = require('compression');
 const session = require('express-session');
 const MongoStore = require('connect-mongo');
-
+const organizationRoutes = require('./routes/organizationroute');
 const authRoutes = require('./routes/auth');
 const userRoutes = require('./routes/users');
 const paymentRoutes = require('./routes/payments');
@@ -90,7 +90,7 @@ app.use(cors({
 // 3. Rate Limiting - Prevent brute force attacks
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // Limit each IP to 100 requests per windowMs
+  max: 400, // Limit each IP to 100 requests per windowMs
   message: {
     success: false,
     message: 'Too many requests from this IP, please try again after 15 minutes'
@@ -102,7 +102,7 @@ const limiter = rateLimit({
 // Stricter rate limit for auth endpoints
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 5, // Limit each IP to 5 requests per windowMs
+  max: 10, // Limit each IP to 5 requests per windowMs
   message: {
     success: false,
     message: 'Too many login attempts, please try again after 15 minutes'
@@ -241,6 +241,7 @@ app.use('/api/payment-types', paymentTypeRoutes);
 app.use('/api/transactions', transactionRoutes);
 app.use('/api/reports', reportRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/organizations', organizationRoutes);
 // ==================== PAYMENT GATEWAY ROUTES ====================
 const paymentGatewayRoutes = require('./routes/paymentGateway');
 app.use('/api/payment-gateway', paymentGatewayRoutes);

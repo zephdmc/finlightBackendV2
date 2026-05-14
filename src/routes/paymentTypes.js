@@ -1,291 +1,158 @@
 const express = require('express');
 const router = express.Router();
+const rateLimit = require('express-rate-limit');
 const paymentTypeController = require('../controllers/PaymentTypeController');
 const { protect } = require('../middleware/auth');
 const roleCheck = require('../middleware/roleCheck');
 const ValidationMiddleware = require('../middleware/validation');
+const { body, param } = require('express-validator');
 
-// Import body for custom validation rules
-const { body } = require('express-validator');
+// ==================== RATE LIMITING ====================
+const readLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 200,
+  message: { success: false, message: 'Too many read requests' },
+});
+
+const adminWriteLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 50,
+  message: { success: false, message: 'Too many write operations' }
+});
+
+const bulkOperationLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 5,
+  message: { success: false, message: 'Bulk operation limit reached' }
+});
 
 // All routes require authentication
 router.use(protect);
+router.use(readLimiter);
 
-/**
- * @route   GET /api/payment-types
- * @desc    Get all payment types
- * @access  Private
- */
-router.get(
-  '/',
-  ValidationMiddleware.pagination,
-  paymentTypeController.getAllPaymentTypes
+// ==================== PUBLIC READ ROUTES ====================
+
+router.get('/', ValidationMiddleware.pagination, paymentTypeController.getAllPaymentTypes);
+router.get('/active', paymentTypeController.getActivePaymentTypes);
+router.get('/mandatory', paymentTypeController.getMandatoryPaymentTypes);
+router.get('/optional', paymentTypeController.getOptionalPaymentTypes);
+
+router.get('/frequency/:frequency',
+  param('frequency').isIn(['one-time', 'monthly', 'quarterly', 'yearly']),
+  ValidationMiddleware.validate,
+  paymentTypeController.getPaymentTypesByFrequency
 );
 
-/**
- * @route   GET /api/payment-types/active
- * @desc    Get all active payment types
- * @access  Private
- */
-router.get(
-  '/active',
-  paymentTypeController.getActivePaymentTypes
-);
+// ==================== ADMIN STATISTICS ROUTES ====================
 
-/**
- * @route   GET /api/payment-types/mandatory
- * @desc    Get mandatory payment types
- * @access  Private
- */
-router.get(
-  '/mandatory',
-  paymentTypeController.getMandatoryPaymentTypes
-);
+router.get('/stats', roleCheck('admin'), paymentTypeController.getPaymentTypeStats);
+router.get('/summary', roleCheck('admin'), paymentTypeController.getPaymentTypeSummary);
+router.get('/export', roleCheck('admin'), paymentTypeController.exportPaymentTypes);
 
-/**
- * @route   GET /api/payment-types/optional
- * @desc    Get optional payment types
- * @access  Private
- */
-router.get(
-  '/optional',
-  paymentTypeController.getOptionalPaymentTypes
-);
+// ==================== SINGLE PAYMENT TYPE ROUTES ====================
 
-/**
- * @route   GET /api/payment-types/frequency/:frequency
- * @desc    Get payment types by frequency
- * @access  Private
- */
-router.get(
-  '/frequency/:frequency',
-  paymentTypeController.getPaymentTypesByFrequency  // Make sure this exists in your controller
-);
-
-/**
- * @route   GET /api/payment-types/stats
- * @desc    Get payment type statistics (Admin only)
- * @access  Private/Admin
- */
-router.get(
-  '/stats',
-  roleCheck('admin'),
-  paymentTypeController.getPaymentTypeStats
-);
-
-/**
- * @route   GET /api/payment-types/summary
- * @desc    Get payment type summary for dashboard (Admin only)
- * @access  Private/Admin
- */
-router.get(
-  '/summary',
-  roleCheck('admin'),
-  paymentTypeController.getPaymentTypeSummary
-);
-
-/**
- * @route   GET /api/payment-types/export
- * @desc    Export payment types to CSV (Admin only)
- * @access  Private/Admin
- */
-router.get(
-  '/export',
-  roleCheck('admin'),
-  paymentTypeController.exportPaymentTypes
-);
-
-/**
- * @route   GET /api/payment-types/:id
- * @desc    Get single payment type by ID
- * @access  Private
- */
-router.get(
-  '/:id',
-  ValidationMiddleware.idParam,
-  paymentTypeController.getPaymentType
-);
-
-/**
- * @route   GET /api/payment-types/:id/payments
- * @desc    Get payments by payment type (Admin only)
- * @access  Private/Admin
- */
-router.get(
-  '/:id/payments',
+router.get('/:id', ValidationMiddleware.idParam, paymentTypeController.getPaymentType);
+router.get('/:id/payments', 
   roleCheck('admin'),
   ValidationMiddleware.idParam,
   ValidationMiddleware.pagination,
   paymentTypeController.getPaymentsByType
 );
-
-/**
- * @route   GET /api/payment-types/:id/unpaid-members
- * @desc    Get members with unpaid payments for a specific type (Admin only)
- * @access  Private/Admin
- */
-router.get(
-  '/:id/unpaid-members',
+router.get('/:id/unpaid-members',
   roleCheck('admin'),
   ValidationMiddleware.idParam,
   paymentTypeController.getUnpaidMembersByType
 );
-
-/**
- * @route   GET /api/payment-types/:id/report
- * @desc    Get payment type usage report (Admin only)
- * @access  Private/Admin
- */
-router.get(
-  '/:id/report',
+router.get('/:id/report',
   roleCheck('admin'),
   ValidationMiddleware.idParam,
   paymentTypeController.getPaymentTypeReport
 );
 
-/**
- * @route   POST /api/payment-types
- * @desc    Create new payment type (Admin only)
- * @access  Private/Admin
- */
-router.post(
-  '/',
+// ==================== ADMIN WRITE ROUTES ====================
+
+// Create payment type - REMOVED sanitizeAll and preventNoSQLInjection
+router.post('/',
   roleCheck('admin'),
+  adminWriteLimiter,
   [
-    body('name')
-      .notEmpty()
-      .withMessage('Payment type name is required')
-      .trim()
-      .isLength({ min: 2, max: 100 })
-      .withMessage('Name must be between 2 and 100 characters'),
-    body('type')
-      .notEmpty()
-      .withMessage('Payment type category is required')
-      .isIn(['dues', 'leavy', 'registration', 'monthly_dues', 'wedding_dues', 'charity_dues'])
-      .withMessage('Invalid category type'),
-    body('description')
-      .optional()
-      .trim()
-      .isLength({ max: 500 })
-      .withMessage('Description cannot exceed 500 characters'),
-    body('amount')
-      .isFloat({ min: 0.01 })
-      .withMessage('Amount must be greater than 0'),
-    body('is_mandatory')
-      .optional()
-      .isBoolean()
-      .withMessage('is_mandatory must be a boolean'),
-    body('frequency')
-      .optional()
-      .isIn(['one-time', 'monthly', 'quarterly', 'yearly'])
-      .withMessage('Invalid frequency type')
+    body('name').notEmpty().trim().isLength({ min: 2, max: 100 })
+      .matches(/^[a-zA-Z0-9\s-]+$/),
+    body('type').isIn(['dues', 'leavy', 'registration', 'monthly_dues', 'wedding_dues', 'charity_dues']),
+    body('description').optional().trim().isLength({ max: 500 }),
+    body('amount').isFloat({ min: 0.01, max: 10000000 }),
+    body('is_mandatory').optional().isBoolean(),
+    body('frequency').optional().isIn(['one-time', 'monthly', 'quarterly', 'yearly']),
+    body('duration_value').optional().isInt({ min: 1, max: 365 }),
+    body('duration_unit').optional().isIn(['days', 'weeks', 'months', 'years'])
   ],
   ValidationMiddleware.validate,
   paymentTypeController.createPaymentType
 );
 
-/**
- * @route   POST /api/payment-types/bulk
- * @desc    Create multiple payment types (Admin only)
- * @access  Private/Admin
- */
-router.post(
-  '/bulk',
+// Bulk create - REMOVED sanitizeAll
+router.post('/bulk',
   roleCheck('admin'),
+  bulkOperationLimiter,
   [
-    body('paymentTypes')
-      .isArray()
-      .withMessage('paymentTypes must be an array')
-      .notEmpty()
-      .withMessage('paymentTypes array cannot be empty')
+    body('paymentTypes').isArray({ min: 1, max: 20 }),
+    body('paymentTypes.*.name').notEmpty().trim().isLength({ min: 2, max: 100 }),
+    body('paymentTypes.*.type').isIn(['dues', 'leavy', 'registration', 'monthly_dues', 'wedding_dues', 'charity_dues']),
+    body('paymentTypes.*.amount').isFloat({ min: 0.01, max: 10000000 }),
+    body('paymentTypes.*.frequency').optional().isIn(['one-time', 'monthly', 'quarterly', 'yearly'])
   ],
   ValidationMiddleware.validate,
   paymentTypeController.createBulkPaymentTypes
 );
 
-/**
- * @route   POST /api/payment-types/:id/generate-payments
- * @desc    Generate recurring payments from a payment type (Admin only)
- * @access  Private/Admin
- */
-router.post(
-  '/:id/generate-payments',
+// Generate recurring payments
+router.post('/:id/generate-payments',
   roleCheck('admin'),
+  adminWriteLimiter,
   ValidationMiddleware.idParam,
+  [
+    body('startDate').optional().isISO8601().toDate(),
+    body('endDate').optional().isISO8601().toDate(),
+    body('memberIds').optional().isArray(),
+    body('memberIds.*').optional().isMongoId()
+  ],
+  ValidationMiddleware.validate,
   paymentTypeController.generateRecurringPayments
 );
 
-/**
- * @route   PUT /api/payment-types/:id
- * @desc    Update payment type (Admin only)
- * @access  Private/Admin
- */
-router.put(
-  '/:id',
+// Update payment type - REMOVED sanitizeAll
+router.put('/:id',
   roleCheck('admin'),
+  adminWriteLimiter,
   ValidationMiddleware.idParam,
   [
-    body('name')
-      .optional()
-      .trim()
-      .isLength({ min: 2, max: 100 })
-      .withMessage('Name must be between 2 and 100 characters'),
-    body('type')
-      .optional()
-      .isIn(['dues', 'leavy', 'registration', 'monthly_dues', 'wedding_dues', 'charity_dues'])
-      .withMessage('Invalid category type'),
-    body('description')
-      .optional()
-      .trim()
-      .isLength({ max: 500 })
-      .withMessage('Description cannot exceed 500 characters'),
-    body('amount')
-      .optional()
-      .isFloat({ min: 0.01 })
-      .withMessage('Amount must be greater than 0'),
-    body('is_mandatory')
-      .optional()
-      .isBoolean()
-      .withMessage('is_mandatory must be a boolean'),
-    body('frequency')
-      .optional()
-      .isIn(['one-time', 'monthly', 'quarterly', 'yearly'])
-      .withMessage('Invalid frequency type'),
-    body('isActive')
-      .optional()
-      .isBoolean()
-      .withMessage('isActive must be a boolean')
+    body('name').optional().trim().isLength({ min: 2, max: 100 })
+      .matches(/^[a-zA-Z0-9\s-]+$/),
+    body('type').optional().isIn(['dues', 'leavy', 'registration', 'monthly_dues', 'wedding_dues', 'charity_dues']),
+    body('description').optional().trim().isLength({ max: 500 }),
+    body('amount').optional().isFloat({ min: 0.01, max: 10000000 }),
+    body('is_mandatory').optional().isBoolean(),
+    body('frequency').optional().isIn(['one-time', 'monthly', 'quarterly', 'yearly']),
+    body('isActive').optional().isBoolean()
   ],
   ValidationMiddleware.validate,
   paymentTypeController.updatePaymentType
 );
 
-/**
- * @route   PATCH /api/payment-types/:id/status
- * @desc    Toggle payment type active status (Admin only)
- * @access  Private/Admin
- */
-router.patch(
-  '/:id/status',
+// Toggle status
+router.patch('/:id/status',
   roleCheck('admin'),
+  adminWriteLimiter,
   ValidationMiddleware.idParam,
-  [
-    body('isActive')
-      .isBoolean()
-      .withMessage('isActive must be a boolean')
-  ],
+  [body('isActive').isBoolean()],
   ValidationMiddleware.validate,
   paymentTypeController.togglePaymentTypeStatus
 );
 
-/**
- * @route   DELETE /api/payment-types/:id
- * @desc    Delete payment type (Admin only)
- * @access  Private/Admin
- */
-router.delete(
-  '/:id',
+// Delete payment type (with check in controller)
+router.delete('/:id',
   roleCheck('admin'),
+  adminWriteLimiter,
   ValidationMiddleware.idParam,
   paymentTypeController.deletePaymentType
 );

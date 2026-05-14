@@ -1,269 +1,141 @@
 const express = require('express');
 const router = express.Router();
+const rateLimit = require('express-rate-limit');
 const reportController = require('../controllers/reportController');
 const { protect } = require('../middleware/auth');
 const roleCheck = require('../middleware/roleCheck');
 const ValidationMiddleware = require('../middleware/validation');
+const { query } = require('express-validator');
 
-// Import body and param in case we need custom validation
-const { body, param } = require('express-validator');
+// ==================== RATE LIMITING ====================
+
+const reportLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: 70,
+  message: { success: false, message: 'Too many report requests. Please try again later.' }
+});
+
+const heavyReportLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 90,
+  message: { success: false, message: 'Rate limit exceeded for this report type.' }
+});
+
+// ==================== AUTHORIZATION MIDDLEWARE ====================
+
+const checkMemberReportAccess = async (req, res, next) => {
+  try {
+    const targetUserId = req.params.userId;
+    
+    if (!targetUserId) {
+      return res.status(400).json({ success: false, message: 'User ID is required' });
+    }
+    
+    if (req.user.role === 'admin') {
+      return next();
+    }
+    
+    if (req.user.id === targetUserId) {
+      return next();
+    }
+    
+    return res.status(403).json({
+      success: false,
+      message: 'Access denied. You can only view your own payment reports.'
+    });
+  } catch (error) {
+    next(error);
+  }
+};
 
 // All routes require authentication
 router.use(protect);
+router.use(reportLimiter);
 
+// ==================== ROUTES ====================
 
-/**
- * @route   GET /api/reports/summary
- * @desc    Get overall financial summary
- * @access  Private (Admin gets full, Members get limited)
- */
-router.get(
-  '/summary',
-  async (req, res, next) => {
-    try {
-      if (req.user.role === 'admin') {
-        await reportController.getSummary(req, res, next);
-      } else {
-        // Members get limited view
-        const paymentService = require('../services/paymentService');
-        const summary = await paymentService.getPaymentSummary();
-        
-        res.status(200).json({
-          success: true,
-          data: {
-            totalBalance: summary.totalRevenue || 0,
-            totalMembers: await require('../models/User').countDocuments({ role: 'member' }),
-            message: 'Limited view for members'
-          }
-        });
-      }
-    } catch (error) {
-      next(error);
-    }
-  }
-);
+// Financial summary (handles member vs admin in controller)
+router.get('/summary', reportController.getSummary);
 
-/**
- * @route   GET /api/reports/monthly-summary
- * @desc    Get monthly financial summary for charts
- * @access  Private/Admin
- */
+// Monthly summary for charts
 router.get(
   '/monthly-summary',
+  heavyReportLimiter,
   roleCheck('admin'),
   ValidationMiddleware.report.monthly,
   reportController.getMonthlySummary
 );
 
-/**
- * @route   GET /api/reports/paid-members
- * @desc    Get list of members who have paid registration
- * @access  Private/Admin
- */
+// Paid members report
 router.get(
   '/paid-members',
+  heavyReportLimiter,
   roleCheck('admin'),
   ValidationMiddleware.pagination,
   reportController.getPaidMembers
 );
 
-/**
- * @route   GET /api/reports/outstanding
- * @desc    Get all outstanding payments
- * @access  Private/Admin
- */
+// Outstanding payments report
 router.get(
   '/outstanding',
+  heavyReportLimiter,
   roleCheck('admin'),
   ValidationMiddleware.pagination,
   reportController.getOutstandingPayments
 );
 
-/**
- * @route   GET /api/reports/income
- * @desc    Get income report
- * @access  Private/Admin
- */
+// Income report
 router.get(
   '/income',
+  heavyReportLimiter,
   roleCheck('admin'),
   ValidationMiddleware.pagination,
   reportController.getIncomeReport
 );
 
-/**
- * @route   GET /api/reports/expenditure
- * @desc    Get expenditure report
- * @access  Private/Admin
- */
+
+// Expenditure report
 router.get(
   '/expenditure',
+  heavyReportLimiter,
   roleCheck('admin'),
   ValidationMiddleware.pagination,
   reportController.getExpenditureReport
 );
 
-/**
- * @route   GET /api/reports/member/:userId
- * @desc    Get payment report for specific member
- * @access  Private (Admin or member themselves)
- */
+// Member payment report (with IDOR protection)
 router.get(
   '/member/:userId',
   ValidationMiddleware.idParam,
+  checkMemberReportAccess,
   reportController.getMemberPaymentReport
 );
 
-/**
- * @route   GET /api/reports/export/:type
- * @desc    Export report as CSV/Excel
- * @access  Private/Admin
- */
+// Export report as CSV
 router.get(
   '/export/:type',
+  heavyReportLimiter,
   roleCheck('admin'),
   ValidationMiddleware.report.export,
   reportController.exportReport
 );
 
-/**
- * @route   GET /api/reports/financial-overview
- * @desc    Get detailed financial overview with trends
- * @access  Private/Admin
- */
+// Financial overview with trends
 router.get(
   '/financial-overview',
+  heavyReportLimiter,
   roleCheck('admin'),
-  async (req, res, next) => {
-    try {
-      const { period = 'month' } = req.query;
-      const Income = require('../models/Income');
-      const Expenditure = require('../models/Expenditure');
-      
-      let startDate;
-      const endDate = new Date();
-      
-      switch(period) {
-        case 'week':
-          startDate = new Date(endDate);
-          startDate.setDate(endDate.getDate() - 7);
-          break;
-        case 'month':
-          startDate = new Date(endDate);
-          startDate.setMonth(endDate.getMonth() - 1);
-          break;
-        case 'year':
-          startDate = new Date(endDate);
-          startDate.setFullYear(endDate.getFullYear() - 1);
-          break;
-        default:
-          startDate = new Date(endDate);
-          startDate.setMonth(endDate.getMonth() - 1);
-      }
-      
-      const [incomeData, expenditureData] = await Promise.all([
-        Income.aggregate([
-          { $match: { createdAt: { $gte: startDate, $lte: endDate } } },
-          { $group: { _id: null, total: { $sum: '$amount' }, count: { $sum: 1 } } }
-        ]),
-        Expenditure.aggregate([
-          { $match: { createdAt: { $gte: startDate, $lte: endDate } } },
-          { $group: { _id: null, total: { $sum: '$amount' }, count: { $sum: 1 } } }
-        ])
-      ]);
-      
-      // Get top income sources
-      const topSources = await Income.aggregate([
-        { $match: { createdAt: { $gte: startDate, $lte: endDate } } },
-        { $group: { _id: '$source', total: { $sum: '$amount' } } },
-        { $sort: { total: -1 } },
-        { $limit: 5 }
-      ]);
-      
-      // Get top expenditure purposes
-      const topPurposes = await Expenditure.aggregate([
-        { $match: { createdAt: { $gte: startDate, $lte: endDate } } },
-        { $group: { _id: '$purpose', total: { $sum: '$amount' } } },
-        { $sort: { total: -1 } },
-        { $limit: 5 }
-      ]);
-      
-      res.status(200).json({
-        success: true,
-        data: {
-          period,
-          dateRange: { startDate, endDate },
-          summary: {
-            totalIncome: incomeData[0]?.total || 0,
-            totalExpenditure: expenditureData[0]?.total || 0,
-            netFlow: (incomeData[0]?.total || 0) - (expenditureData[0]?.total || 0),
-            transactionCount: {
-              income: incomeData[0]?.count || 0,
-              expenditure: expenditureData[0]?.count || 0
-            }
-          },
-          topSources,
-          topPurposes
-        }
-      });
-    } catch (error) {
-      next(error);
-    }
-  }
+  query('period').optional().isIn(['week', 'month', 'year']),
+  ValidationMiddleware.validate,
+  reportController.getFinancialOverview  // You'll need to add this to your controller
 );
 
-/**
- * @route   GET /api/reports/member-performance
- * @desc    Get member payment performance metrics (Admin only)
- * @access  Private/Admin
- */
+// Member payment performance metrics
 router.get(
   '/member-performance',
+  heavyReportLimiter,
   roleCheck('admin'),
-  async (req, res, next) => {
-    try {
-      const User = require('../models/User');
-      const Payment = require('../models/Payment');
-      
-      const [totalMembers, paidMembers, outstandingTotals] = await Promise.all([
-        User.countDocuments({ role: 'member' }),
-        Payment.countDocuments({ type: 'registration', status: 'paid' }),
-        Payment.aggregate([
-          { $match: { status: 'unpaid' } },
-          { $group: { _id: '$user', total: { $sum: '$amount' } } },
-          { $sort: { total: -1 } },
-          { $limit: 10 }
-        ])
-      ]);
-      
-      // Get members with highest outstanding
-      const topOutstanding = await Promise.all(
-        outstandingTotals.map(async (item) => {
-          const user = await User.findById(item._id).select('name email');
-          return {
-            user,
-            totalOutstanding: item.total
-          };
-        })
-      );
-      
-      const paymentRate = totalMembers > 0 ? (paidMembers / totalMembers) * 100 : 0;
-      
-      res.status(200).json({
-        success: true,
-        data: {
-          totalMembers,
-          paidMembers,
-          unpaidMembers: totalMembers - paidMembers,
-          paymentRate: Math.round(paymentRate * 100) / 100,
-          topOutstanding,
-          registrationFee: 500
-        }
-      });
-    } catch (error) {
-      next(error);
-    }
-  }
+  reportController.getMemberPerformance  // You'll need to add this to your controller
 );
 
 module.exports = router;

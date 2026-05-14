@@ -12,42 +12,53 @@ const mongoose = require('mongoose');
  */
 class ReportController {
   /**
-   * Get organizationId from authenticated user
+   * Helper: get organizationId from authenticated user
+   * Returns null for super-admin (they have no organization restriction)
    */
-  getOrgId(req) {
+  getOrgId = (req) => {
+    // Super admin has no organization - they manage all organizations
+    if (!req.user) return null;
+    if (req.user.role === 'super-admin' || req.user.role === 'super_admin') {
+      return null;
+    }
     return req.user.organizationId;
-  }
+  };
 
   /**
    * Get overall financial summary (scoped to organization)
    * @route GET /api/reports/summary
    */
-  async getSummary(req, res, next) {
+  getSummary = async (req, res, next) => {
     try {
       const organizationId = this.getOrgId(req);
+      const userRole = req.user.role;
+      
+      let matchCondition = {};
+      
+      if (userRole !== 'super-admin' && userRole !== 'super_admin') {
+        if (!organizationId) {
+          return res.status(400).json({
+            success: false,
+            message: 'Organization ID not found for this user'
+          });
+        }
+        matchCondition = { organizationId: new mongoose.Types.ObjectId(organizationId) };
+      }
+
       const [totalIncome, totalExpenditure, totalMembers, unpaidPayments, paidMembers] = await Promise.all([
-        Income.aggregate([
-          { $match: { organizationId: new mongoose.Types.ObjectId(organizationId) } },
-          { $group: { _id: null, total: { $sum: '$amount' } } }
-        ]),
-        Expenditure.aggregate([
-          { $match: { organizationId: new mongoose.Types.ObjectId(organizationId) } },
-          { $group: { _id: null, total: { $sum: '$amount' } } }
-        ]),
-        User.countDocuments({ role: 'member', organizationId }),
+        Income.aggregate([{ $match: matchCondition }, { $group: { _id: null, total: { $sum: '$amount' } } }]),
+        Expenditure.aggregate([{ $match: matchCondition }, { $group: { _id: null, total: { $sum: '$amount' } } }]),
+        User.countDocuments({ ...matchCondition, role: 'member' }),
         Payment.aggregate([
-          { $match: { organizationId: new mongoose.Types.ObjectId(organizationId), status: 'unpaid' } },
+          { $match: { ...matchCondition, status: 'unpaid' } },
           { $group: { _id: null, total: { $sum: '$amount' } } }
         ]),
-        Payment.countDocuments({ type: 'registration', status: 'paid', organizationId })
+        Payment.countDocuments({ ...matchCondition, type: 'registration', status: 'paid' })
       ]);
 
       const income = totalIncome[0]?.total || 0;
       const expenditure = totalExpenditure[0]?.total || 0;
       const outstanding = unpaidPayments[0]?.total || 0;
-
-      // Get recent activity for dashboard (scoped)
-      const recentTransactions = await this.getRecentTransactions(5, organizationId);
 
       res.status(200).json({
         success: true,
@@ -59,25 +70,36 @@ class ReportController {
           paidMembers,
           outstandingPayments: outstanding,
           registrationFee: 500,
-          recentTransactions,
           timestamp: new Date()
         }
       });
     } catch (error) {
+      console.error('Error in getSummary:', error);
       next(error);
     }
-  }
+  };
 
   /**
    * Get paid members report (scoped)
    * @route GET /api/reports/paid-members
    */
-  async getPaidMembers(req, res, next) {
+  getPaidMembers = async (req, res, next) => {
     try {
       const organizationId = this.getOrgId(req);
+      const userRole = req.user.role;
       const { startDate, endDate, page = 1, limit = 50 } = req.query;
 
-      const query = { type: 'registration', status: 'paid', organizationId };
+      let query = { type: 'registration', status: 'paid' };
+      
+      if (userRole !== 'super-admin' && userRole !== 'super_admin') {
+        if (!organizationId) {
+          return res.status(400).json({
+            success: false,
+            message: 'Organization ID not found for this user'
+          });
+        }
+        query.organizationId = organizationId;
+      }
 
       if (startDate && endDate) {
         query.paidAt = {
@@ -111,20 +133,33 @@ class ReportController {
         }
       });
     } catch (error) {
+      console.error('Error in getPaidMembers:', error);
       next(error);
     }
-  }
+  };
 
   /**
    * Get outstanding payments report (scoped)
    * @route GET /api/reports/outstanding
    */
-  async getOutstandingPayments(req, res, next) {
+  getOutstandingPayments = async (req, res, next) => {
     try {
       const organizationId = this.getOrgId(req);
+      const userRole = req.user.role;
       const { type, page = 1, limit = 50 } = req.query;
 
-      const query = { status: 'unpaid', organizationId };
+      let query = { status: 'unpaid' };
+      
+      if (userRole !== 'super-admin' && userRole !== 'super_admin') {
+        if (!organizationId) {
+          return res.status(400).json({
+            success: false,
+            message: 'Organization ID not found for this user'
+          });
+        }
+        query.organizationId = organizationId;
+      }
+      
       if (type) query.type = type;
 
       const skip = (parseInt(page) - 1) * parseInt(limit);
@@ -154,20 +189,32 @@ class ReportController {
         }
       });
     } catch (error) {
+      console.error('Error in getOutstandingPayments:', error);
       next(error);
     }
-  }
+  };
 
   /**
    * Get income report with filters (scoped)
    * @route GET /api/reports/income
    */
-  async getIncomeReport(req, res, next) {
+  getIncomeReport = async (req, res, next) => {
     try {
       const organizationId = this.getOrgId(req);
+      const userRole = req.user.role;
       const { startDate, endDate, source, page = 1, limit = 50 } = req.query;
 
-      const query = { organizationId };
+      let query = {};
+      
+      if (userRole !== 'super-admin' && userRole !== 'super_admin') {
+        if (!organizationId) {
+          return res.status(400).json({
+            success: false,
+            message: 'Organization ID not found for this user'
+          });
+        }
+        query.organizationId = organizationId;
+      }
 
       if (startDate && endDate) {
         query.createdAt = {
@@ -220,20 +267,32 @@ class ReportController {
         }
       });
     } catch (error) {
+      console.error('Error in getIncomeReport:', error);
       next(error);
     }
-  }
+  };
 
   /**
    * Get expenditure report with filters (scoped)
    * @route GET /api/reports/expenditure
    */
-  async getExpenditureReport(req, res, next) {
+  getExpenditureReport = async (req, res, next) => {
     try {
       const organizationId = this.getOrgId(req);
+      const userRole = req.user.role;
       const { startDate, endDate, purpose, page = 1, limit = 50 } = req.query;
 
-      const query = { organizationId };
+      let query = {};
+      
+      if (userRole !== 'super-admin' && userRole !== 'super_admin') {
+        if (!organizationId) {
+          return res.status(400).json({
+            success: false,
+            message: 'Organization ID not found for this user'
+          });
+        }
+        query.organizationId = organizationId;
+      }
 
       if (startDate && endDate) {
         query.createdAt = {
@@ -286,37 +345,50 @@ class ReportController {
         }
       });
     } catch (error) {
+      console.error('Error in getExpenditureReport:', error);
       next(error);
     }
-  }
+  };
 
   /**
    * Get member payment report (for specific member) – scoped to organization
    * @route GET /api/reports/member/:userId
    */
-  async getMemberPaymentReport(req, res, next) {
+  getMemberPaymentReport = async (req, res, next) => {
     try {
       const organizationId = this.getOrgId(req);
+      const userRole = req.user.role;
       const { userId } = req.params;
       const { startDate, endDate } = req.query;
 
-      // Ensure the target user belongs to the same organization
-      const targetUser = await User.findOne({ _id: userId, organizationId });
-      if (!targetUser) {
-        return res.status(404).json({
-          success: false,
-          message: 'Member not found in your organization'
-        });
+      // Ensure the target user belongs to the same organization (for non-super-admin)
+      if (userRole !== 'super-admin' && userRole !== 'super_admin') {
+        if (!organizationId) {
+          return res.status(400).json({
+            success: false,
+            message: 'Organization ID not found for this user'
+          });
+        }
+        const targetUser = await User.findOne({ _id: userId, organizationId });
+        if (!targetUser) {
+          return res.status(404).json({
+            success: false,
+            message: 'Member not found in your organization'
+          });
+        }
       }
 
-      if (req.user.role !== 'admin' && req.user.id !== userId) {
+      if (userRole !== 'super-admin' && userRole !== 'super_admin' && userRole !== 'admin' && req.user.id !== userId) {
         return res.status(403).json({
           success: false,
           message: 'Not authorized to view this report'
         });
       }
 
-      const query = { user: userId, organizationId };
+      const query = { user: userId };
+      if (userRole !== 'super-admin' && userRole !== 'super_admin' && organizationId) {
+        query.organizationId = organizationId;
+      }
 
       if (startDate && endDate) {
         query.createdAt = {
@@ -353,30 +425,41 @@ class ReportController {
         }
       });
     } catch (error) {
+      console.error('Error in getMemberPaymentReport:', error);
       next(error);
     }
-  }
+  };
 
   /**
    * Get monthly financial summary (for charts) – scoped
    * @route GET /api/reports/monthly-summary
    */
-  async getMonthlySummary(req, res, next) {
+  getMonthlySummary = async (req, res, next) => {
     try {
       const organizationId = this.getOrgId(req);
+      const userRole = req.user.role;
       const { year = new Date().getFullYear() } = req.query;
 
       const startDate = new Date(year, 0, 1);
       const endDate = new Date(year, 11, 31, 23, 59, 59);
 
+      let incomeMatch = { createdAt: { $gte: startDate, $lte: endDate } };
+      let expenditureMatch = { createdAt: { $gte: startDate, $lte: endDate } };
+      
+      if (userRole !== 'super-admin' && userRole !== 'super_admin') {
+        if (!organizationId) {
+          return res.status(400).json({
+            success: false,
+            message: 'Organization ID not found for this user'
+          });
+        }
+        incomeMatch.organizationId = new mongoose.Types.ObjectId(organizationId);
+        expenditureMatch.organizationId = new mongoose.Types.ObjectId(organizationId);
+      }
+
       const [monthlyIncome, monthlyExpenditure] = await Promise.all([
         Income.aggregate([
-          {
-            $match: {
-              organizationId: new mongoose.Types.ObjectId(organizationId),
-              createdAt: { $gte: startDate, $lte: endDate }
-            }
-          },
+          { $match: incomeMatch },
           {
             $group: {
               _id: { $month: '$createdAt' },
@@ -385,12 +468,7 @@ class ReportController {
           }
         ]),
         Expenditure.aggregate([
-          {
-            $match: {
-              organizationId: new mongoose.Types.ObjectId(organizationId),
-              createdAt: { $gte: startDate, $lte: endDate }
-            }
-          },
+          { $match: expenditureMatch },
           {
             $group: {
               _id: { $month: '$createdAt' },
@@ -430,71 +508,192 @@ class ReportController {
         }
       });
     } catch (error) {
+      console.error('Error in getMonthlySummary:', error);
       next(error);
     }
-  }
+  };
 
   /**
-   * Get recent transactions (helper method, now tenant-aware)
-   * @param {number} limit
-   * @param {string} organizationId
+   * Get detailed financial overview with trends
+   * @route GET /api/reports/financial-overview
    */
-  async getRecentTransactions(limit = 10, organizationId) {
-    const [incomes, expenditures] = await Promise.all([
-      Income.find({ organizationId })
-        .sort({ createdAt: -1 })
-        .limit(limit)
-        .populate('createdBy', 'name'),
-      Expenditure.find({ organizationId })
-        .sort({ createdAt: -1 })
-        .limit(limit)
-        .populate('createdBy', 'name')
-    ]);
+  getFinancialOverview = async (req, res, next) => {
+    try {
+      const { period = 'month' } = req.query;
+      const organizationId = this.getOrgId(req);
+      const userRole = req.user.role;
+      
+      const validPeriods = ['week', 'month', 'year'];
+      const safePeriod = validPeriods.includes(period) ? period : 'month';
+      
+      let startDate;
+      const endDate = new Date();
+      
+      switch(safePeriod) {
+        case 'week':
+          startDate = new Date(endDate);
+          startDate.setDate(endDate.getDate() - 7);
+          break;
+        case 'month':
+          startDate = new Date(endDate);
+          startDate.setMonth(endDate.getMonth() - 1);
+          break;
+        case 'year':
+          startDate = new Date(endDate);
+          startDate.setFullYear(endDate.getFullYear() - 1);
+          break;
+        default:
+          startDate = new Date(endDate);
+          startDate.setMonth(endDate.getMonth() - 1);
+      }
+      
+      const MAX_DATE_RANGE_DAYS = 730;
+      const dateRangeDays = (endDate - startDate) / (1000 * 60 * 60 * 24);
+      if (dateRangeDays > MAX_DATE_RANGE_DAYS) {
+        return res.status(400).json({
+          success: false,
+          message: `Date range cannot exceed ${MAX_DATE_RANGE_DAYS} days`
+        });
+      }
+      
+      let filter = { createdAt: { $gte: startDate, $lte: endDate } };
+      if (userRole !== 'super-admin' && userRole !== 'super_admin' && organizationId) {
+        filter.organizationId = new mongoose.Types.ObjectId(organizationId);
+      }
+      
+      const [incomeData, expenditureData, topSources, topPurposes] = await Promise.all([
+        Income.aggregate([
+          { $match: filter },
+          { $group: { _id: null, total: { $sum: '$amount' }, count: { $sum: 1 } } }
+        ]),
+        Expenditure.aggregate([
+          { $match: filter },
+          { $group: { _id: null, total: { $sum: '$amount' }, count: { $sum: 1 } } }
+        ]),
+        Income.aggregate([
+          { $match: filter },
+          { $group: { _id: '$source', total: { $sum: '$amount' } } },
+          { $sort: { total: -1 } },
+          { $limit: 5 }
+        ]),
+        Expenditure.aggregate([
+          { $match: filter },
+          { $group: { _id: '$purpose', total: { $sum: '$amount' } } },
+          { $sort: { total: -1 } },
+          { $limit: 5 }
+        ])
+      ]);
+      
+      res.status(200).json({
+        success: true,
+        data: {
+          period: safePeriod,
+          dateRange: { startDate: startDate.toISOString(), endDate: endDate.toISOString() },
+          summary: {
+            totalIncome: incomeData[0]?.total || 0,
+            totalExpenditure: expenditureData[0]?.total || 0,
+            netFlow: (incomeData[0]?.total || 0) - (expenditureData[0]?.total || 0),
+            transactionCount: {
+              income: incomeData[0]?.count || 0,
+              expenditure: expenditureData[0]?.count || 0
+            }
+          },
+          topSources,
+          topPurposes
+        }
+      });
+    } catch (error) {
+      console.error('Financial overview error:', error);
+      next(error);
+    }
+  };
 
-    const transactions = [
-      ...incomes.map(inc => ({
-        id: inc._id,
-        type: 'income',
-        amount: inc.amount,
-        description: inc.description,
-        reference: inc.source,
-        createdBy: inc.createdBy?.name || 'System',
-        createdAt: inc.createdAt
-      })),
-      ...expenditures.map(exp => ({
-        id: exp._id,
-        type: 'expenditure',
-        amount: exp.amount,
-        description: exp.description,
-        reference: exp.purpose,
-        createdBy: exp.createdBy?.name || 'System',
-        createdAt: exp.createdAt
-      }))
-    ];
-
-    return transactions
-      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
-      .slice(0, limit);
-  }
+  /**
+   * Get member payment performance metrics
+   * @route GET /api/reports/member-performance
+   */
+  getMemberPerformance = async (req, res, next) => {
+    try {
+      const organizationId = this.getOrgId(req);
+      const userRole = req.user.role;
+      
+      let filter = {};
+      if (userRole !== 'super-admin' && userRole !== 'super_admin' && organizationId) {
+        filter.organizationId = new mongoose.Types.ObjectId(organizationId);
+      }
+      
+      const [totalMembers, paidMembers, outstandingTotals] = await Promise.all([
+        User.countDocuments({ role: 'member', ...filter }),
+        Payment.countDocuments({ type: 'registration', status: 'paid', ...filter }),
+        Payment.aggregate([
+          { $match: { status: 'unpaid', ...filter } },
+          { $group: { _id: '$user', total: { $sum: '$amount' } } },
+          { $sort: { total: -1 } },
+          { $limit: 10 }
+        ])
+      ]);
+      
+      const topOutstanding = await Promise.all(
+        outstandingTotals.map(async (item) => {
+          const userFilter = { _id: item._id };
+          if (organizationId && userRole !== 'super-admin' && userRole !== 'super_admin') {
+            userFilter.organizationId = organizationId;
+          }
+          const user = await User.findOne(userFilter).select('name email');
+          return { user, totalOutstanding: item.total };
+        })
+      );
+      
+      const paymentRate = totalMembers > 0 ? (paidMembers / totalMembers) * 100 : 0;
+      
+      res.status(200).json({
+        success: true,
+        data: {
+          totalMembers,
+          paidMembers,
+          unpaidMembers: totalMembers - paidMembers,
+          paymentRate: Math.round(paymentRate * 100) / 100,
+          topOutstanding: topOutstanding.filter(item => item.user !== null),
+          registrationFee: 500
+        }
+      });
+    } catch (error) {
+      console.error('Member performance error:', error);
+      next(error);
+    }
+  };
 
   /**
    * Export report as CSV (scoped to organization)
    * @route GET /api/reports/export/:type
    */
-  async exportReport(req, res, next) {
+  exportReport = async (req, res, next) => {
     try {
       const organizationId = this.getOrgId(req);
+      const userRole = req.user.role;
       const { type } = req.params;
       const { startDate, endDate } = req.query;
 
+      console.log('Export report - Type:', type, 'OrganizationId:', organizationId);
+
       let data = [];
-      let filename = '';
       let headers = [];
 
-      // Build date filter scoped by organization
-      const dateFilter = { organizationId };
+      // Build query based on user role
+      let query = {};
+      
+      if (userRole !== 'super-admin' && userRole !== 'super_admin') {
+        if (!organizationId) {
+          return res.status(400).json({
+            success: false,
+            message: 'Organization ID not found for this user'
+          });
+        }
+        query.organizationId = organizationId;
+      }
+      
       if (startDate && endDate) {
-        dateFilter.createdAt = {
+        query.createdAt = {
           $gte: new Date(startDate),
           $lte: new Date(endDate)
         };
@@ -502,13 +701,11 @@ class ReportController {
 
       switch (type) {
         case 'income': {
-          const incomes = await Income.find(dateFilter)
+          const incomes = await Income.find(query)
             .populate('createdBy', 'name')
             .sort({ createdAt: -1 });
 
-          filename = `income_report_${organizationId}_${new Date().toISOString().split('T')[0]}.csv`;
           headers = ['Date', 'Description', 'Source', 'Amount', 'Recorded By'];
-
           data = incomes.map(item => ({
             'Date': new Date(item.createdAt).toLocaleDateString(),
             'Description': item.description || 'N/A',
@@ -520,13 +717,11 @@ class ReportController {
         }
 
         case 'expenditure': {
-          const expenditures = await Expenditure.find(dateFilter)
+          const expenditures = await Expenditure.find(query)
             .populate('createdBy', 'name')
             .sort({ createdAt: -1 });
 
-          filename = `expenditure_report_${organizationId}_${new Date().toISOString().split('T')[0]}.csv`;
           headers = ['Date', 'Purpose', 'Description', 'Amount', 'Recorded By'];
-
           data = expenditures.map(item => ({
             'Date': new Date(item.createdAt).toLocaleDateString(),
             'Purpose': item.purpose || 'N/A',
@@ -538,13 +733,11 @@ class ReportController {
         }
 
         case 'payments': {
-          const payments = await Payment.find(dateFilter)
+          const payments = await Payment.find(query)
             .populate('user', 'name email')
             .sort({ createdAt: -1 });
 
-          filename = `payments_report_${organizationId}_${new Date().toISOString().split('T')[0]}.csv`;
           headers = ['Date', 'Member Name', 'Member Email', 'Payment Type', 'Amount', 'Status', 'Reference'];
-
           data = payments.map(item => ({
             'Date': new Date(item.createdAt).toLocaleDateString(),
             'Member Name': item.user?.name || 'N/A',
@@ -558,26 +751,28 @@ class ReportController {
         }
 
         case 'members': {
-          const members = await User.find({ role: 'member', organizationId })
+          const membersQuery = { role: 'member' };
+          if (userRole !== 'super-admin' && userRole !== 'super_admin' && organizationId) {
+            membersQuery.organizationId = organizationId;
+          }
+          
+          const members = await User.find(membersQuery)
             .select('-password')
             .sort({ createdAt: -1 });
 
-          filename = `members_report_${organizationId}_${new Date().toISOString().split('T')[0]}.csv`;
-          headers = ['Name', 'Email', 'Role', 'Registration Date', 'Has Paid Registration'];
+          headers = ['Name', 'Email', 'Registration Date', 'Has Paid Registration'];
 
-          // Get payment status for each member (scoped)
           const membersWithStatus = await Promise.all(members.map(async (member) => {
-            const registrationPayment = await Payment.findOne({
-              user: member._id,
-              type: 'registration',
-              status: 'paid',
-              organizationId
-            });
+            let paymentQuery = { user: member._id, type: 'registration', status: 'paid' };
+            if (userRole !== 'super-admin' && userRole !== 'super_admin' && organizationId) {
+              paymentQuery.organizationId = organizationId;
+            }
+            
+            const registrationPayment = await Payment.findOne(paymentQuery);
 
             return {
               'Name': member.name,
               'Email': member.email,
-              'Role': member.role,
               'Registration Date': new Date(member.createdAt).toLocaleDateString(),
               'Has Paid Registration': registrationPayment ? 'Yes' : 'No'
             };
@@ -602,13 +797,11 @@ class ReportController {
       }
 
       // Generate CSV content
-      const csvHeaders = headers;
       const csvRows = [];
-
-      csvRows.push(csvHeaders.join(','));
+      csvRows.push(headers.join(','));
 
       for (const row of data) {
-        const values = csvHeaders.map(header => {
+        const values = headers.map(header => {
           let value = row[header] || '';
           value = String(value).replace(/"/g, '""');
           if (value.includes(',') || value.includes('\n') || value.includes('"')) {
@@ -620,6 +813,7 @@ class ReportController {
       }
 
       const csvContent = csvRows.join('\n');
+      const filename = `${type}_report_${new Date().toISOString().split('T')[0]}.csv`;
 
       res.setHeader('Content-Type', 'text/csv');
       res.setHeader('Content-Disposition', `attachment; filename=${filename}`);
@@ -629,9 +823,14 @@ class ReportController {
       res.status(200).send(csvContent);
     } catch (error) {
       console.error('Export error:', error);
-      next(error);
+      res.status(500).json({
+        success: false,
+        message: error.message || 'Failed to export report'
+      });
     }
-  }
+  };
 }
 
-module.exports = new ReportController();
+// Create instance and export
+const reportController = new ReportController();
+module.exports = reportController;
