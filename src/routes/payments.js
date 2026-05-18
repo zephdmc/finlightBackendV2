@@ -44,7 +44,7 @@ router.get('/stats', roleCheck('admin'), paymentController.getPaymentStats);
 // ==================== POST ROUTES ====================
 router.post('/admin-direct', roleCheck('admin'), adminPaymentLimiter, ValidationMiddleware.payment.adminDirect, paymentController.createAdminDirectPayment);
 router.post('/member-payment', [
-  body('type').isIn(['registration', 'dues', 'fine']),
+  body('type').isIn(['registration', 'dues', 'fine','monthly_dues', 'wedding_dues', 'charity_dues', 'leavy' ]),
   body('amount').isFloat({ min: 0.01, max: 10000000 }),
   body('description').optional().trim().isLength({ max: 500 })
 ], ValidationMiddleware.validate, paymentController.createMemberPayment);
