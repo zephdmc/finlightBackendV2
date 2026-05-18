@@ -29,25 +29,33 @@ const expenditureSchema = new mongoose.Schema({
   receipt: {
     type: String
   },
+  // ✅ ADDED: Metadata for tracking fee-related expenditures
+  metadata: {
+    type: mongoose.Schema.Types.Mixed,
+    default: {}
+  },
   createdAt: {
     type: Date,
     default: Date.now
   },
-updatedBy: {
-  type: mongoose.Schema.Types.ObjectId,
-  ref: 'User'
-},
-updatedAt: {
-  type: Date
-}
-
-
+  updatedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  },
+  updatedAt: {
+    type: Date
+  }
 });
 
-// Index for tenant-based queries
+// Indexes
 expenditureSchema.index({ organizationId: 1, createdAt: -1 });
-
-// Compound index for filtering by organization and createdBy
 expenditureSchema.index({ organizationId: 1, createdBy: 1 });
+expenditureSchema.index({ organizationId: 1, purpose: 1 }); // ✅ Added for fee filtering
+expenditureSchema.index({ 'metadata.feeType': 1 }); // ✅ Added for fee type queries
+
+expenditureSchema.pre('save', function(next) {
+  this.updatedAt = new Date();
+  next();
+});
 
 module.exports = mongoose.model('Expenditure', expenditureSchema);

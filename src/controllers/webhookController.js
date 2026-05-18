@@ -3,24 +3,45 @@ const crypto = require('crypto');
 const Payment = require('../models/Payment');
 const Income = require('../models/Income');
 const User = require('../models/User');
+const Organization = require('../models/Organization'); // ✅ ADDED
+
+// ✅ ADDED: Calculate Paystack fee based on Paystack's actual pricing
+const calculatePaystackFee = (amount) => {
+  const percentage = 1.5; // 1.5%
+  const fixedFee = 100; // ₦100 for amounts >= ₦2,500
+  const threshold = 2500;
+  const maxFee = 2000;
+  
+  let fee = (amount * percentage) / 100;
+  
+  if (amount >= threshold) {
+    fee += fixedFee;
+  }
+  
+  return Math.min(fee, maxFee);
+};
 
 /**
- * Helper: handle partial payment (used internally)
+ * Helper: handle partial payment with proper fee calculation
  */
-const handlePartialPayment = async (originalPayment, amountPaid, reference) => {
+const handlePartialPayment = async (originalPayment, amountPaid, reference, paystackFee, platformFee, netToOrg) => {
   const expectedAmount = originalPayment.expectedAmount || originalPayment.amount;
   const remainingAmount = expectedAmount - amountPaid;
 
-  // Update original payment as partial
+  // Update original payment as partial with fee breakdown
   originalPayment.paidAmount = amountPaid;
   originalPayment.remainingAmount = remainingAmount;
   originalPayment.isPartial = true;
   originalPayment.status = 'partial';
   originalPayment.paidAt = new Date();
   originalPayment.transactionReference = reference;
+  originalPayment.paystackFeeDeducted = paystackFee;
+  originalPayment.platformFeeDeducted = platformFee;
+  originalPayment.netToOrganization = netToOrg;
+  originalPayment.actualAmountPaid = amountPaid;
   await originalPayment.save();
 
-  // Create outstanding payment record for remaining amount (same organization)
+  // Create outstanding payment record for remaining amount
   const outstandingPayment = await Payment.create({
     user: originalPayment.user,
     name: `${originalPayment.name} (Outstanding Balance)`,
@@ -62,7 +83,6 @@ exports.handlePaystackWebhook = async (req, res, next) => {
       .digest('hex');
 
     if (hash !== req.headers['x-paystack-signature']) {
-      // Invalid signature – return 200 anyway to prevent Paystack from retrying (by convention)
       return res.status(200).json({ success: false, message: 'Invalid signature' });
     }
 
@@ -71,11 +91,14 @@ exports.handlePaystackWebhook = async (req, res, next) => {
       return res.status(200).json({ success: true });
     }
 
-    const { reference, amount, metadata } = event.data;
+    const { reference, amount, fees, metadata, subaccount } = event.data;
     const amountPaid = amount / 100;
+    const paystackFee = fees / 100;
     const organizationId = metadata?.organizationId;
 
-    // Find payment by transaction reference, optionally scoped by organizationId
+    console.log(`📨 Webhook received: ₦${amountPaid} for reference ${reference}`);
+
+    // Find payment by transaction reference
     let payment = await Payment.findOne({ transactionReference: reference });
     if (!payment && organizationId) {
       payment = await Payment.findOne({ transactionReference: reference, organizationId });
@@ -89,7 +112,6 @@ exports.handlePaystackWebhook = async (req, res, next) => {
     }
 
     if (!payment) {
-      // No matching payment found – log and acknowledge
       console.warn(`Webhook: No payment found for reference ${reference}`);
       return res.status(200).json({ success: true });
     }
@@ -100,13 +122,26 @@ exports.handlePaystackWebhook = async (req, res, next) => {
     }
 
     const expectedAmount = payment.expectedAmount || payment.amount;
+    
+    // ✅ Calculate platform fee (4% of after-Paystack amount)
+    const afterPaystack = amountPaid - paystackFee;
+    const platformFee = afterPaystack * 0.04;
+    const netToOrg = afterPaystack - platformFee;
+    
+    console.log(`💰 Transaction breakdown:`);
+    console.log(`   Amount paid: ₦${amountPaid}`);
+    console.log(`   Paystack fee: ₦${paystackFee.toFixed(2)}`);
+    console.log(`   After Paystack: ₦${afterPaystack.toFixed(2)}`);
+    console.log(`   Platform fee (4%): ₦${platformFee.toFixed(2)}`);
+    console.log(`   Organization receives: ₦${netToOrg.toFixed(2)}`);
 
     // Handle partial payment
     if (amountPaid < expectedAmount) {
-      await handlePartialPayment(payment, amountPaid, reference);
+      const partialResult = await handlePartialPayment(payment, amountPaid, reference, paystackFee, platformFee, netToOrg);
 
       await Income.create({
         amount: amountPaid,
+        expectedAmount: expectedAmount,
         source: `${payment.type} - ${payment.description || 'Payment'} (Partial)`,
         date: new Date(),
         description: `Partial payment of ₦${amountPaid.toLocaleString()} for ${payment.name}. Remaining: ₦${(expectedAmount - amountPaid).toLocaleString()}`,
@@ -115,10 +150,16 @@ exports.handlePaystackWebhook = async (req, res, next) => {
         userId: payment.user,
         organizationId: payment.organizationId,
         transactionReference: reference,
-        isPartial: true
+        isPartial: true,
+        metadata: {
+          paystackFee: paystackFee,
+          platformFee: platformFee,
+          netToOrganization: netToOrg,
+          afterPaystack: afterPaystack
+        }
       });
 
-      console.log(`Partial payment processed. Remaining: ${expectedAmount - amountPaid}`);
+      console.log(`⚠️ Partial payment processed. Remaining: ₦${expectedAmount - amountPaid}`);
     } else {
       // Full payment
       payment.status = 'paid';
@@ -126,10 +167,17 @@ exports.handlePaystackWebhook = async (req, res, next) => {
       payment.remainingAmount = 0;
       payment.paidAt = new Date();
       payment.transactionReference = reference;
+      payment.actualAmountPaid = amountPaid;
+      payment.expectedAmount = expectedAmount;
+      payment.paystackFeeDeducted = paystackFee;
+      payment.platformFeeDeducted = platformFee;
+      payment.netToOrganization = netToOrg;
+      payment.afterPaystackAmount = afterPaystack;
       await payment.save();
 
       await Income.create({
         amount: payment.amount,
+        expectedAmount: expectedAmount,
         source: `${payment.type} - ${payment.description || 'Payment'}`,
         date: new Date(),
         description: payment.description || `${payment.type} payment via Paystack`,
@@ -137,10 +185,16 @@ exports.handlePaystackWebhook = async (req, res, next) => {
         paymentType: payment.type,
         userId: payment.user,
         organizationId: payment.organizationId,
-        transactionReference: reference
+        transactionReference: reference,
+        metadata: {
+          paystackFee: paystackFee,
+          platformFee: platformFee,
+          netToOrganization: netToOrg,
+          afterPaystack: afterPaystack
+        }
       });
 
-      console.log(`Full payment processed for ${payment._id}`);
+      console.log(`✅ Full payment processed for ${payment._id}`);
     }
 
     // If this was a registration payment, update user's registration status
