@@ -21,17 +21,11 @@ const adminPaymentLimiter = rateLimit({
   message: { success: false, message: 'Too many admin payment requests' }
 });
 
-const webhookLimiter = rateLimit({
-  windowMs: 1 * 60 * 1000,
-  max: 30,
-  skipSuccessfulRequests: true
-});
-
-// All routes require authentication (except webhook)
+// All routes require authentication
 router.use(protect);
 router.use(paymentLimiter);
 
-// ==================== GET ROUTES (SPECIFIC PATHS FIRST) ====================
+// ==================== GET ROUTES ====================
 
 // Public routes
 router.get('/public/summary', paymentController.getPublicSummary);
@@ -40,7 +34,6 @@ router.get('/public/income', paymentController.getPublicIncome);
 // User payment routes
 router.get('/pending', paymentController.getPendingPayments);
 router.get('/outstanding', paymentController.getOutstandingPayments);
-router.get('/verify/:reference', ValidationMiddleware.payment.verify, paymentController.verifyPayment);
 router.get('/', paymentController.getUserPayments);
 
 // Admin routes
@@ -49,7 +42,6 @@ router.get('/summary', roleCheck('admin'), paymentController.getPaymentSummary);
 router.get('/stats', roleCheck('admin'), paymentController.getPaymentStats);
 
 // ==================== POST ROUTES ====================
-router.post('/initialize', ValidationMiddleware.payment.initialize, paymentController.initializePayment);
 router.post('/admin-direct', roleCheck('admin'), adminPaymentLimiter, ValidationMiddleware.payment.adminDirect, paymentController.createAdminDirectPayment);
 router.post('/member-payment', [
   body('type').isIn(['registration', 'dues', 'fine']),
@@ -76,9 +68,6 @@ router.put('/:id', roleCheck('admin'), ValidationMiddleware.idParam, [
 
 // ==================== DELETE ROUTES ====================
 router.delete('/:id', roleCheck('admin'), ValidationMiddleware.idParam, paymentController.deletePayment);
-
-// ==================== WEBHOOK (NO AUTH) ====================
-router.post('/webhook/paystack', express.raw({ type: 'application/json' }), webhookLimiter, paymentController.handleWebhook);
 
 // ==================== GENERIC ID ROUTE (MUST BE LAST!) ====================
 router.get('/:id', ValidationMiddleware.idParam, paymentController.getPaymentById);
