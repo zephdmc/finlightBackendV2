@@ -505,6 +505,14 @@ router.get('/status/:paymentId', protect, statusCheckLimiter, ValidationMiddlewa
   }
 });
 
+// Temporary test route - add this
+router.get('/test-route', (req, res) => {
+  res.json({ 
+    success: true, 
+    message: 'Test route works!',
+    registeredRoutes: ['/health', '/verify/:reference', '/webhook', '/initialize', '/status/:paymentId']
+  });
+});
 // ==================== HEALTH CHECK ====================
 
 router.get('/health', (req, res) => {
