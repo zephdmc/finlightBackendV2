@@ -7,6 +7,24 @@ const mongoose = require('mongoose');
  * Organization Controller (Super Admin only)
  */
 class OrganizationController {
+  constructor() {
+    // Bind all methods to this instance
+    this.getBankCode = this.getBankCode.bind(this);
+    this.createPaystackSubaccount = this.createPaystackSubaccount.bind(this);
+    this.updateBankDetails = this.updateBankDetails.bind(this);
+    this.getSubaccountStatus = this.getSubaccountStatus.bind(this);
+    this.getAllOrganizations = this.getAllOrganizations.bind(this);
+    this.createOrganization = this.createOrganization.bind(this);
+    this.updateOrganization = this.updateOrganization.bind(this);
+    this.deleteOrganization = this.deleteOrganization.bind(this);
+    this.updateOrganizationStatus = this.updateOrganizationStatus.bind(this);
+    this.getOrganizationStats = this.getOrganizationStats.bind(this);
+    this.getOrganizationById = this.getOrganizationById.bind(this);
+    this.getOrganizationSettings = this.getOrganizationSettings.bind(this);
+    this.updateOrganizationSettings = this.updateOrganizationSettings.bind(this);
+    this.requireSuperAdmin = this.requireSuperAdmin.bind(this);
+  }
+
   /**
    * Helper: ensure user is super_admin (handles both formats)
    */
@@ -29,6 +47,8 @@ class OrganizationController {
    */
   async getBankCode(bankName) {
     try {
+      console.log('🔍 Fetching bank code for:', bankName);
+      
       const response = await fetch('https://api.paystack.co/bank', {
         headers: {
           'Authorization': `Bearer ${process.env.PAYSTACK_SECRET_KEY}`
@@ -37,10 +57,19 @@ class OrganizationController {
       const data = await response.json();
       
       if (data.status) {
-        const bank = data.data.find(b => 
-          b.name.toLowerCase().includes(bankName.toLowerCase()) ||
-          b.slug.toLowerCase().includes(bankName.toLowerCase())
+        // Try exact match first, then partial match
+        let bank = data.data.find(b => 
+          b.name.toLowerCase() === bankName.toLowerCase()
         );
+        
+        if (!bank) {
+          bank = data.data.find(b => 
+            b.name.toLowerCase().includes(bankName.toLowerCase()) ||
+            bankName.toLowerCase().includes(b.name.toLowerCase())
+          );
+        }
+        
+        console.log('Bank found:', bank ? bank.name : 'Not found');
         return bank ? bank.code : null;
       }
       return null;
@@ -59,7 +88,7 @@ class OrganizationController {
         business_name: businessName,
         settlement_bank: bankCode,
         account_number: accountNumber,
-        percentage_charge: 0,  // Platform handles fees separately via split
+        percentage_charge: 0,
         description: `Subaccount for ${businessName}`,
         primary_contact_email: email,
         metadata: JSON.stringify({
@@ -542,14 +571,19 @@ class OrganizationController {
   }
 
   /**
-   * ✅ UPDATED: Update bank details and AUTO-CREATE Paystack subaccount
+   * ✅ FIXED: Update bank details and AUTO-CREATE Paystack subaccount
    * @route PUT /api/organizations/bank-details
    * @access Private/Admin
    */
   async updateBankDetails(req, res, next) {
     try {
-      const organizationId = req.user.organizationId;
+      console.log('=== UPDATE BANK DETAILS CALLED ===');
+      
+      const organizationId = req.user?.organizationId;
       const { bankName, accountNumber, accountName } = req.body;
+      
+      console.log('Organization ID:', organizationId);
+      console.log('Bank details:', { bankName, accountNumber, accountName });
       
       if (!organizationId) {
         return res.status(400).json({
@@ -558,11 +592,10 @@ class OrganizationController {
         });
       }
 
-      // Validate required fields
       if (!bankName || !accountNumber) {
         return res.status(400).json({
           success: false,
-          message: 'Bank name and account number are required to create a subaccount'
+          message: 'Bank name and account number are required'
         });
       }
 
@@ -589,15 +622,18 @@ class OrganizationController {
       }
 
       // Get bank code from bank name
+      console.log('Calling getBankCode for:', bankName);
       const bankCode = await this.getBankCode(bankName);
+      console.log('Bank code result:', bankCode);
+      
       if (!bankCode) {
         return res.status(400).json({
           success: false,
-          message: `Could not find bank code for "${bankName}". Please check the bank name.`
+          message: `Could not find bank code for "${bankName}". Please check the bank name. Valid banks: Access Bank, Zenith Bank, GTBank, etc.`
         });
       }
 
-      // Create Paystack subaccount automatically
+      // Create Paystack subaccount
       const subaccountResult = await this.createPaystackSubaccount(
         organization.name,
         bankCode,
@@ -609,33 +645,26 @@ class OrganizationController {
       if (!subaccountResult.success) {
         return res.status(400).json({
           success: false,
-          message: `Failed to create Paystack subaccount: ${subaccountResult.error}`,
-          details: subaccountResult.error
+          message: `Failed to create Paystack subaccount: ${subaccountResult.error}`
         });
       }
 
       // Update organization with subaccount details
-      const updateData = {
-        paystack: {
-          subaccountCode: subaccountResult.subaccountCode,
-          bankName: bankName,
-          accountNumber: accountNumber,
-          accountName: accountName || organization.name,
-          percentageCharge: 0,
-          subaccountStatus: 'active',
-          subaccountCreatedAt: new Date(),
-          subaccountVerified: subaccountResult.isVerified
-        },
-        updatedAt: new Date()
+      organization.paystack = {
+        subaccountCode: subaccountResult.subaccountCode,
+        bankName: bankName,
+        accountNumber: accountNumber,
+        accountName: accountName || organization.name,
+        percentageCharge: 0,
+        subaccountStatus: 'active',
+        subaccountCreatedAt: new Date(),
+        subaccountVerified: subaccountResult.isVerified
       };
+      organization.updatedAt = new Date();
+      
+      await organization.save();
 
-      const updatedOrganization = await Organization.findByIdAndUpdate(
-        organizationId,
-        { $set: updateData },
-        { new: true, runValidators: true }
-      );
-
-      console.log(`✅ Subaccount created successfully for ${organization.name}: ${subaccountResult.subaccountCode}`);
+      console.log(`✅ Subaccount created: ${subaccountResult.subaccountCode}`);
 
       res.status(200).json({
         success: true,
@@ -652,6 +681,7 @@ class OrganizationController {
 
     } catch (error) {
       console.error('Error updating bank details:', error);
+      console.error('Error stack:', error.stack);
       res.status(500).json({
         success: false,
         message: error.message || 'Failed to update bank details'
