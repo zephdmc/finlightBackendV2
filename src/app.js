@@ -55,6 +55,7 @@ const userRoutes = require('./routes/users');
 const paymentRoutes = require('./routes/payments');
 const paymentTypeRoutes = require('./routes/paymentTypes');
 const transactionRoutes = require('./routes/transactions');
+const paymentGatewayRoutes = require('./routes/paymentGateway');
 const reportRoutes = require('./routes/reports');
 const errorHandler = require('./middleware/errorHandler');
 const adminRoutes = require('./routes/adminRoutes');
@@ -232,6 +233,7 @@ app.get('/api', (req, res) => {
   
   res.json(info);
 });
+app.use('/api/payment-gateway', paymentGatewayRoutes);
 
 // Routes
 app.use('/api/auth', authRoutes);
@@ -243,8 +245,6 @@ app.use('/api/reports', reportRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/organizations', organizationRoutes);
 // ==================== PAYMENT GATEWAY ROUTES ====================
-const paymentGatewayRoutes = require('./routes/paymentGateway');
-app.use('/api/payment-gateway', paymentGatewayRoutes);
 
 // ==================== ERROR HANDLING ====================
 
