@@ -14,6 +14,7 @@ const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY;
 const PLATFORM_SUBACCOUNT = process.env.PLATFORM_SUBACCOUNT;
 const PAYSTACK_CALLBACK_URL = process.env.PAYSTACK_CALLBACK_URL || 'https://finlightv2.web.app/payment/callback';
 
+
 console.log('✅ Payment Gateway loaded');
 console.log('   Paystack Key:', PAYSTACK_SECRET_KEY ? 'Configured' : 'MISSING');
 console.log('   Platform Subaccount:', PLATFORM_SUBACCOUNT ? 'Configured' : 'MISSING');
@@ -276,22 +277,41 @@ router.post('/webhook', express.raw({ type: 'application/json' }), webhookLimite
     }
     
     const event = req.body;
-    console.log('📨 Webhook received:', event.event);
     
     if (event.event === 'charge.success') {
-      const { reference } = event.data;
+      const { reference, amount, fees } = event.data;
       const payment = await Payment.findOne({ transactionReference: reference });
       
       if (payment && payment.status !== 'paid') {
+        // ✅ Calculate fees here too
+        const amountPaid = amount / 100;
+        const paystackFee = fees / 100;
+        const afterPaystack = amountPaid - paystackFee;
+        const platformFee = afterPaystack * 0.04;
+        const netToOrg = afterPaystack - platformFee;
+        
         payment.status = 'paid';
         payment.paidAt = new Date();
+        payment.actualAmountPaid = amountPaid;
+        payment.paystackFeeDeducted = paystackFee;
+        payment.afterPaystackAmount = afterPaystack;
+        payment.platformFeeDeducted = platformFee;
+        payment.netToOrganization = netToOrg;
+        
         await payment.save();
         
-        if (payment.type === 'registration') {
-          await User.findByIdAndUpdate(payment.user, { hasPaidRegistration: true });
-        }
-        
-        console.log(`✅ Webhook processed: ${reference}`);
+        // Also create Income record
+        await Income.create({
+          amount: payment.amount,
+          source: `${payment.type} payment`,
+          date: new Date(),
+          description: payment.description,
+          paymentId: payment._id,
+          paymentType: payment.type,
+          transactionReference: reference,
+          organizationId: payment.user?.organizationId,
+          metadata: { paystackFee, platformFee, netToOrg }
+        });
       }
     }
     
@@ -301,7 +321,6 @@ router.post('/webhook', express.raw({ type: 'application/json' }), webhookLimite
     res.status(200).json({ success: false });
   }
 });
-
 // ==================== PAYMENT STATUS CHECK ====================
 
 router.get('/status/:paymentId', protect, statusCheckLimiter, ValidationMiddleware.idParam, async (req, res) => {
