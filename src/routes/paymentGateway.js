@@ -9,7 +9,7 @@ const User = require('../models/User');
 const Income = require('../models/Income');
 const Organization = require('../models/Organization');
 const { body, param } = require('express-validator');
-const Expenditure = require('../models/Expenditure'); // Add this import
+const Expenditure = require('../models/Expenditure');
 
 const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY;
 const PLATFORM_SUBACCOUNT = process.env.PLATFORM_SUBACCOUNT;
@@ -56,6 +56,15 @@ const generateIdempotencyKey = (paymentId) => {
 const validateAmount = (amount) => {
   const numAmount = Number(amount);
   return !isNaN(numAmount) && numAmount > 0 && numAmount <= 10000000;
+};
+
+// ✅ Idempotency helper to prevent duplicate expenditure records
+const hasExpenditureRecord = async (paymentId, feeType) => {
+  const existing = await Expenditure.findOne({
+    'metadata.paymentId': paymentId,
+    'metadata.feeType': feeType
+  });
+  return !!existing;
 };
 
 // ==================== VALIDATION RULES ====================
@@ -263,47 +272,57 @@ router.get('/verify/:reference', verifyLimiter, validatePaymentVerification, asy
         }
       });
       
-      // ✅ 2. Record EXPENDITURE for Paystack fee
+      // ✅ 2. Record EXPENDITURE for Paystack fee (with idempotency check)
       if (paystackFee > 0) {
-        await Expenditure.create({
-          amount: paystackFee,
-          purpose: 'Payment Processing Fee',
-          description: `Paystack transaction fee (${amountPaid >= 2500 ? '1.5% + ₦100' : '1.5%'}) for payment ${reference}`,
-          createdBy: payment.user._id,
-          organizationId: payment.user?.organizationId,
-          receipt: null,
-          metadata: {
-            feeType: 'paystack',
-            paymentId: payment._id,
-            transactionReference: reference,
-            grossAmount: amountPaid,
-            percentage: 1.5,
-            fixedFee: amountPaid >= 2500 ? 100 : 0,
-            timestamp: new Date().toISOString()
-          }
-        });
-        console.log(`💰 Recorded Paystack fee expenditure: ₦${paystackFee.toFixed(2)}`);
+        const alreadyExists = await hasExpenditureRecord(payment._id, 'paystack');
+        if (!alreadyExists) {
+          await Expenditure.create({
+            amount: paystackFee,
+            purpose: 'Payment Processing Fee',
+            description: `Paystack transaction fee (${amountPaid >= 2500 ? '1.5% + ₦100' : '1.5%'}) for payment ${reference}`,
+            createdBy: payment.user._id,
+            organizationId: payment.user?.organizationId,
+            receipt: null,
+            metadata: {
+              feeType: 'paystack',
+              paymentId: payment._id,
+              transactionReference: reference,
+              grossAmount: amountPaid,
+              percentage: 1.5,
+              fixedFee: amountPaid >= 2500 ? 100 : 0,
+              timestamp: new Date().toISOString()
+            }
+          });
+          console.log(`💰 Recorded Paystack fee expenditure: ₦${paystackFee.toFixed(2)}`);
+        } else {
+          console.log(`⏭️ Paystack expenditure already exists for payment ${payment._id}`);
+        }
       }
       
-      // ✅ 3. Record EXPENDITURE for Platform fee
+      // ✅ 3. Record EXPENDITURE for Platform fee (with idempotency check)
       if (platformFee > 0) {
-        await Expenditure.create({
-          amount: platformFee,
-          purpose: 'Platform Service Fee',
-          description: `Finlight platform fee (4% of after-Paystack amount) for payment ${reference}`,
-          createdBy: payment.user._id,
-          organizationId: payment.user?.organizationId,
-          receipt: null,
-          metadata: {
-            feeType: 'platform',
-            paymentId: payment._id,
-            transactionReference: reference,
-            afterPaystackAmount: afterPaystack,
-            percentage: 4,
-            timestamp: new Date().toISOString()
-          }
-        });
-        console.log(`💰 Recorded Platform fee expenditure: ₦${platformFee.toFixed(2)}`);
+        const alreadyExists = await hasExpenditureRecord(payment._id, 'platform');
+        if (!alreadyExists) {
+          await Expenditure.create({
+            amount: platformFee,
+            purpose: 'Platform Service Fee',
+            description: `Finlight platform fee (4% of after-Paystack amount) for payment ${reference}`,
+            createdBy: payment.user._id,
+            organizationId: payment.user?.organizationId,
+            receipt: null,
+            metadata: {
+              feeType: 'platform',
+              paymentId: payment._id,
+              transactionReference: reference,
+              afterPaystackAmount: afterPaystack,
+              percentage: 4,
+              timestamp: new Date().toISOString()
+            }
+          });
+          console.log(`💰 Recorded Platform fee expenditure: ₦${platformFee.toFixed(2)}`);
+        } else {
+          console.log(`⏭️ Platform expenditure already exists for payment ${payment._id}`);
+        }
       }
       
       // ✅ 4. Record NET INCOME (what organization actually receives)
@@ -399,28 +418,36 @@ router.post('/webhook', express.raw({ type: 'application/json' }), webhookLimite
           metadata: { isGrossAmount: true, fees: { paystackFee, platformFee, netToOrg } }
         });
         
-        // Paystack Fee Expenditure
+        // Paystack Fee Expenditure (with idempotency check)
         if (paystackFee > 0) {
-          await Expenditure.create({
-            amount: paystackFee,
-            purpose: 'Payment Processing Fee',
-            description: `Paystack fee for payment ${reference}`,
-            createdBy: payment.user?._id,
-            organizationId: payment.user?.organizationId,
-            metadata: { feeType: 'paystack', paymentId: payment._id }
-          });
+          const alreadyExists = await hasExpenditureRecord(payment._id, 'paystack');
+          if (!alreadyExists) {
+            await Expenditure.create({
+              amount: paystackFee,
+              purpose: 'Payment Processing Fee',
+              description: `Paystack fee for payment ${reference}`,
+              createdBy: payment.user?._id,
+              organizationId: payment.user?.organizationId,
+              metadata: { feeType: 'paystack', paymentId: payment._id }
+            });
+            console.log(`💰 Webhook - Recorded Paystack fee: ₦${paystackFee.toFixed(2)}`);
+          }
         }
         
-        // Platform Fee Expenditure
+        // Platform Fee Expenditure (with idempotency check)
         if (platformFee > 0) {
-          await Expenditure.create({
-            amount: platformFee,
-            purpose: 'Platform Service Fee',
-            description: `Finlight platform fee for payment ${reference}`,
-            createdBy: payment.user?._id,
-            organizationId: payment.user?.organizationId,
-            metadata: { feeType: 'platform', paymentId: payment._id }
-          });
+          const alreadyExists = await hasExpenditureRecord(payment._id, 'platform');
+          if (!alreadyExists) {
+            await Expenditure.create({
+              amount: platformFee,
+              purpose: 'Platform Service Fee',
+              description: `Finlight platform fee for payment ${reference}`,
+              createdBy: payment.user?._id,
+              organizationId: payment.user?.organizationId,
+              metadata: { feeType: 'platform', paymentId: payment._id }
+            });
+            console.log(`💰 Webhook - Recorded Platform fee: ₦${platformFee.toFixed(2)}`);
+          }
         }
         
         // Net Income Record
