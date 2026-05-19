@@ -227,13 +227,13 @@ app.get('/api', (req, res) => {
       payments: '/api/payments',
       paymentTypes: '/api/payment-types',
       transactions: '/api/transactions',
-      reports: '/api/reports'
+      reports: '/api/reports',
+      paymentGateway: '/api/payment-gateway'  // ✅ Add this
     };
   }
   
   res.json(info);
 });
-app.use('/api/payment-gateway', paymentGatewayRoutes);
 
 // Routes
 app.use('/api/auth', authRoutes);
@@ -244,6 +244,8 @@ app.use('/api/transactions', transactionRoutes);
 app.use('/api/reports', reportRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/organizations', organizationRoutes);
+app.use('/api/payment-gateway', paymentGatewayRoutes);
+
 // ==================== PAYMENT GATEWAY ROUTES ====================
 
 // ==================== ERROR HANDLING ====================
