@@ -130,4 +130,10 @@ router.delete(
   organizationController.deleteOrganization
 );
 
+// Add this to your organizationroute.js (if missing)
+router.get('/subaccount/status', 
+  roleCheck('admin'), 
+  organizationController.getSubaccountStatus
+);
+
 module.exports = router;
