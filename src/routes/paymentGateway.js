@@ -392,91 +392,103 @@ router.all('/webhook-test', (req, res) => {
 
 
 // ==================== PAYMENT WEBHOOK (FIXED VERSION) ====================
-router.post('/webhook', webhookLimiter, async (req, res) => {
-  try {
-    // Get the raw body from the request
-    let rawBody;
-    if (req.rawBody) {
-      rawBody = req.rawBody;
-    } else {
-      rawBody = JSON.stringify(req.body);
-    }
-    
-    const hash = crypto.createHmac('sha512', PAYSTACK_SECRET_KEY)
-      .update(rawBody)
-      .digest('hex');
-    
-    if (hash !== req.headers['x-paystack-signature']) {
-      console.log('❌ Invalid webhook signature');
-      return res.status(401).json({ success: false });
-    }
-    
-    const event = req.body;
-    console.log('📨 Webhook received:', event.event);
-    
-    if (event.event === 'charge.success') {
-      const { reference, amount, fees } = event.data;
-      const payment = await Payment.findOne({ transactionReference: reference })
-        .populate('user', 'organizationId');
-      
-      if (payment && payment.status !== 'paid') {
-        const amountPaid = amount / 100;
-        const paystackFee = fees / 100;
-        const afterPaystack = amountPaid - paystackFee;
-        const platformFee = afterPaystack * 0.04;
-        const netToOrg = afterPaystack - platformFee;
-        const totalFees = paystackFee + platformFee;
-        
-        payment.status = 'paid';
-        payment.paidAt = new Date();
-        payment.actualAmountPaid = amountPaid;
-        payment.paystackFeeDeducted = paystackFee;
-        payment.afterPaystackAmount = afterPaystack;
-        payment.platformFeeDeducted = platformFee;
-        payment.netToOrganization = netToOrg;
-        await payment.save();
-        
-        console.log(`✅ Webhook processed: ₦${amountPaid} → Org net: ₦${netToOrg.toFixed(2)}`);
-        
-        // Create expenditure records (same as before)
-        if (paystackFee > 0) {
-          const alreadyExists = await hasExpenditureRecord(payment._id, 'paystack');
-          if (!alreadyExists) {
-            await Expenditure.create({
-              amount: paystackFee,
-              purpose: 'Payment Processing Fee',
-              description: `Paystack fee for payment ${reference}`,
-              createdBy: payment.user?._id,
-              organizationId: payment.user?.organizationId,
-              metadata: { feeType: 'paystack', paymentId: payment._id }
-            });
-            console.log(`💰 Recorded Paystack fee: ₦${paystackFee.toFixed(2)}`);
-          }
-        }
-        
-        if (platformFee > 0) {
-          const alreadyExists = await hasExpenditureRecord(payment._id, 'platform');
-          if (!alreadyExists) {
-            await Expenditure.create({
-              amount: platformFee,
-              purpose: 'Platform Service Fee',
-              description: `Finlight platform fee for payment ${reference}`,
-              createdBy: payment.user?._id,
-              organizationId: payment.user?.organizationId,
-              metadata: { feeType: 'platform', paymentId: payment._id }
-            });
-            console.log(`💰 Recorded Platform fee: ₦${platformFee.toFixed(2)}`);
-          }
-        }
-      }
-    }
-    
-    res.status(200).json({ success: true });
-  } catch (error) {
-    console.error('Webhook error:', error);
-    res.status(200).json({ success: false });
-  }
+router.post('/webhook', (req, res) => {
+  console.log('🔥 SIMPLIFIED WEBHOOK WAS HIT!');
+  console.log('Headers:', req.headers);
+  console.log('Body:', req.body);
+  
+  // Return success immediately for testing
+  res.status(200).json({ 
+    success: true, 
+    message: 'Webhook received (simplified)',
+    received: true
+  });
 });
+// router.post('/webhook', webhookLimiter, async (req, res) => {
+//   try {
+//     // Get the raw body from the request
+//     let rawBody;
+//     if (req.rawBody) {
+//       rawBody = req.rawBody;
+//     } else {
+//       rawBody = JSON.stringify(req.body);
+//     }
+    
+//     const hash = crypto.createHmac('sha512', PAYSTACK_SECRET_KEY)
+//       .update(rawBody)
+//       .digest('hex');
+    
+//     if (hash !== req.headers['x-paystack-signature']) {
+//       console.log('❌ Invalid webhook signature');
+//       return res.status(401).json({ success: false });
+//     }
+    
+//     const event = req.body;
+//     console.log('📨 Webhook received:', event.event);
+    
+//     if (event.event === 'charge.success') {
+//       const { reference, amount, fees } = event.data;
+//       const payment = await Payment.findOne({ transactionReference: reference })
+//         .populate('user', 'organizationId');
+      
+//       if (payment && payment.status !== 'paid') {
+//         const amountPaid = amount / 100;
+//         const paystackFee = fees / 100;
+//         const afterPaystack = amountPaid - paystackFee;
+//         const platformFee = afterPaystack * 0.04;
+//         const netToOrg = afterPaystack - platformFee;
+//         const totalFees = paystackFee + platformFee;
+        
+//         payment.status = 'paid';
+//         payment.paidAt = new Date();
+//         payment.actualAmountPaid = amountPaid;
+//         payment.paystackFeeDeducted = paystackFee;
+//         payment.afterPaystackAmount = afterPaystack;
+//         payment.platformFeeDeducted = platformFee;
+//         payment.netToOrganization = netToOrg;
+//         await payment.save();
+        
+//         console.log(`✅ Webhook processed: ₦${amountPaid} → Org net: ₦${netToOrg.toFixed(2)}`);
+        
+//         // Create expenditure records (same as before)
+//         if (paystackFee > 0) {
+//           const alreadyExists = await hasExpenditureRecord(payment._id, 'paystack');
+//           if (!alreadyExists) {
+//             await Expenditure.create({
+//               amount: paystackFee,
+//               purpose: 'Payment Processing Fee',
+//               description: `Paystack fee for payment ${reference}`,
+//               createdBy: payment.user?._id,
+//               organizationId: payment.user?.organizationId,
+//               metadata: { feeType: 'paystack', paymentId: payment._id }
+//             });
+//             console.log(`💰 Recorded Paystack fee: ₦${paystackFee.toFixed(2)}`);
+//           }
+//         }
+        
+//         if (platformFee > 0) {
+//           const alreadyExists = await hasExpenditureRecord(payment._id, 'platform');
+//           if (!alreadyExists) {
+//             await Expenditure.create({
+//               amount: platformFee,
+//               purpose: 'Platform Service Fee',
+//               description: `Finlight platform fee for payment ${reference}`,
+//               createdBy: payment.user?._id,
+//               organizationId: payment.user?.organizationId,
+//               metadata: { feeType: 'platform', paymentId: payment._id }
+//             });
+//             console.log(`💰 Recorded Platform fee: ₦${platformFee.toFixed(2)}`);
+//           }
+//         }
+//       }
+//     }
+    
+//     res.status(200).json({ success: true });
+//   } catch (error) {
+//     console.error('Webhook error:', error);
+//     res.status(200).json({ success: false });
+//   }
+// });
 
 // ==================== PAYMENT STATUS CHECK ====================
 
