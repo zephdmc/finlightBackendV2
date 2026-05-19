@@ -371,7 +371,25 @@ router.get('/verify/:reference', verifyLimiter, validatePaymentVerification, asy
   }
 });
 
+
+
+
 // ==================== PAYMENT WEBHOOK ====================
+
+// TEMPORARY TEST WEBHOOK - Add this BEFORE your existing webhook
+router.all('/webhook-test', (req, res) => {
+  console.log('🔥 Test webhook hit!');
+  console.log('Method:', req.method);
+  console.log('Headers:', req.headers);
+  console.log('Body:', req.body);
+  res.json({ 
+    success: true, 
+    message: 'Test webhook endpoint works!',
+    method: req.method,
+    hasBody: !!req.body
+  });
+});
+
 
 router.post('/webhook', express.raw({ type: 'application/json' }), webhookLimiter, async (req, res) => {
   try {
