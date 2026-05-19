@@ -9,7 +9,6 @@ const User = require('../models/User');
 const Income = require('../models/Income');
 const Organization = require('../models/Organization');
 const { body, param } = require('express-validator');
-const Expenditure = require('../models/Expenditure');
 
 const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY;
 const PLATFORM_SUBACCOUNT = process.env.PLATFORM_SUBACCOUNT;
@@ -57,20 +56,11 @@ const validateAmount = (amount) => {
   return !isNaN(numAmount) && numAmount > 0 && numAmount <= 10000000;
 };
 
-// ✅ Idempotency helper to prevent duplicate expenditure records
-const hasExpenditureRecord = async (paymentId, feeType) => {
-  const existing = await Expenditure.findOne({
-    'metadata.paymentId': paymentId,
-    'metadata.feeType': feeType
-  });
-  return !!existing;
-};
-
 // ==================== FEE CALCULATION HELPERS ====================
 
 /**
  * Calculate what member needs to pay so organization receives target amount
- * Solves: targetOrgAmount = amount - paystackFee(amount) - platformFee(afterPaystack)
+ * Fees are ADDED ON TOP for card payments
  */
 const calculateMemberPayAmount = (targetOrganizationAmount) => {
   if (!targetOrganizationAmount || targetOrganizationAmount <= 0) return 0;
@@ -101,9 +91,9 @@ const calculateMemberPayAmount = (targetOrganizationAmount) => {
 };
 
 /**
- * Calculate fee breakdown from the actual amount paid
+ * Calculate fees for a given amount and return net to organization
  */
-const calculateFeesFromPaidAmount = (amountPaid) => {
+const calculateNetToOrganization = (amountPaid) => {
   const paystackFee = amountPaid * 0.015 + (amountPaid >= 2500 ? 100 : 0);
   const finalPaystackFee = Math.min(paystackFee, 2000);
   const afterPaystack = amountPaid - finalPaystackFee;
@@ -123,22 +113,29 @@ const calculateFeesFromPaidAmount = (amountPaid) => {
 // ==================== PARTIAL PAYMENT HELPERS ====================
 
 /**
- * Create or update outstanding payment record for partial payments
+ * Process a partial payment (bank transfer or card underpayment)
+ * The organization amount remains the target, shortage becomes outstanding
  */
-const createOrUpdateOutstandingPayment = async (originalPayment, amountPaid, fees, reference) => {
-  // Calculate remaining amount (what org should still receive)
-  const totalTargetOrgAmount = originalPayment.targetOrgAmount || originalPayment.amount;
+const processPartialPayment = async (originalPayment, amountPaid, reference, isManual = false) => {
+  const targetOrgAmount = originalPayment.targetOrgAmount || originalPayment.amount;
   const totalPaidSoFar = (originalPayment.totalPaidSoFar || 0) + amountPaid;
-  const remainingAmount = totalTargetOrgAmount - totalPaidSoFar;
   
-  // Update original payment with partial payment info
+  // Calculate what organization gets from THIS payment (after fees)
+  const fees = calculateNetToOrganization(amountPaid);
+  const netToOrgFromThisPayment = fees.netToOrg;
+  
+  // The organization's target amount remains the same (e.g., ₦5,000)
+  // The remaining amount the organization still needs to receive
+  const remainingOrgTarget = targetOrgAmount - totalPaidSoFar;
+  
+  // Update original payment
   originalPayment.totalPaidSoFar = totalPaidSoFar;
-  originalPayment.remainingAmount = remainingAmount;
-  originalPayment.isPartial = remainingAmount > 0;
+  originalPayment.remainingAmount = remainingOrgTarget;
+  originalPayment.isPartial = remainingOrgTarget > 0;
   originalPayment.partialPayments = originalPayment.partialPayments || [];
   originalPayment.partialPayments.push({
     amount: amountPaid,
-    netToOrg: fees.netToOrg,
+    netToOrg: netToOrgFromThisPayment,
     date: new Date(),
     transactionReference: reference,
     fees: {
@@ -148,7 +145,7 @@ const createOrUpdateOutstandingPayment = async (originalPayment, amountPaid, fee
     }
   });
   
-  if (remainingAmount <= 0) {
+  if (remainingOrgTarget <= 0) {
     originalPayment.status = 'paid';
     originalPayment.completedAt = new Date();
   } else {
@@ -157,96 +154,66 @@ const createOrUpdateOutstandingPayment = async (originalPayment, amountPaid, fee
   
   await originalPayment.save();
   
-  // If there's remaining amount, create or update outstanding payment record
-  if (remainingAmount > 0) {
-    let outstandingPayment = await Payment.findOne({
+  // Record INCOME for this partial payment (what org actually gets from this transaction)
+  await Income.create({
+    amount: netToOrgFromThisPayment,
+    source: `${originalPayment.type} payment (Partial - ₦${amountPaid.toLocaleString()} paid)`,
+    date: new Date(),
+    description: `Partial payment of ₦${amountPaid.toLocaleString()} received. Fees: ₦${fees.totalFees.toLocaleString()}. Organization target: ₦${targetOrgAmount.toLocaleString()}, Remaining: ₦${remainingOrgTarget.toLocaleString()}`,
+    paymentId: originalPayment._id,
+    paymentType: originalPayment.type,
+    transactionReference: reference,
+    organizationId: originalPayment.user?.organizationId,
+    metadata: { 
+      isPartial: true,
+      partialAmount: amountPaid,
+      netToOrg: netToOrgFromThisPayment,
+      remainingTarget: remainingOrgTarget,
+      fees: { paystackFee: fees.paystackFee, platformFee: fees.platformFee }
+    }
+  });
+  
+  // Create or update outstanding payment record for remaining target amount
+  let outstandingPayment = null;
+  if (remainingOrgTarget > 0) {
+    outstandingPayment = await Payment.findOne({
       parentPaymentId: originalPayment._id,
       type: 'outstanding',
       status: 'unpaid'
     });
     
     if (outstandingPayment) {
-      // Update existing outstanding payment
-      outstandingPayment.amount = remainingAmount;
-      outstandingPayment.description = `Outstanding balance for ${originalPayment.name} - Original: ₦${totalTargetOrgAmount.toLocaleString()}, Paid: ₦${totalPaidSoFar.toLocaleString()}`;
+      outstandingPayment.amount = remainingOrgTarget;
+      outstandingPayment.targetOrgAmount = remainingOrgTarget;
+      outstandingPayment.description = `Outstanding balance of ₦${remainingOrgTarget.toLocaleString()} for ${originalPayment.name}`;
       await outstandingPayment.save();
     } else {
-      // Create new outstanding payment record
-      outstandingPayment = new Payment({
+      outstandingPayment = await Payment.create({
         name: `${originalPayment.name} (Outstanding Balance)`,
         type: 'outstanding',
-        amount: remainingAmount,
-        description: `Remaining balance from ${originalPayment.name}. Original amount: ₦${totalTargetOrgAmount.toLocaleString()}, Total paid: ₦${totalPaidSoFar.toLocaleString()}`,
+        amount: remainingOrgTarget,
+        targetOrgAmount: remainingOrgTarget,
+        description: `Remaining balance of ₦${remainingOrgTarget.toLocaleString()} for ${originalPayment.name}. Original amount: ₦${targetOrgAmount.toLocaleString()}, Total paid so far: ₦${totalPaidSoFar.toLocaleString()}`,
         user: originalPayment.user,
         organizationId: originalPayment.organizationId,
         paymentTypeId: originalPayment.paymentTypeId,
         parentPaymentId: originalPayment._id,
         status: 'unpaid',
         isPartial: true,
-        dueDate: originalPayment.dueDate,
-        metadata: {
-          originalAmount: totalTargetOrgAmount,
-          paidAmount: totalPaidSoFar,
-          remainingAmount: remainingAmount,
-          partialPayments: originalPayment.partialPayments
-        }
+        dueDate: originalPayment.dueDate || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
       });
-      await outstandingPayment.save();
     }
-    
-    return { remainingAmount, outstandingPayment };
+    console.log(`📝 Created outstanding record: ₦${remainingOrgTarget.toLocaleString()} for ${originalPayment.name}`);
   }
   
-  return { remainingAmount: 0, outstandingPayment: null };
-};
-
-/**
- * Process a payment (full or partial) and handle outstanding balance
- */
-const processPaymentWithOutstanding = async (payment, amountPaid, fees, reference, isPartial = false) => {
-  // Update payment with fee breakdown
-  payment.status = 'paid';
-  payment.paidAt = new Date();
-  payment.actualAmountPaid = amountPaid;
-  payment.paystackFeeDeducted = fees.paystackFee;
-  payment.afterPaystackAmount = fees.afterPaystack;
-  payment.platformFeeDeducted = fees.platformFee;
-  payment.netToOrganization = fees.netToOrg;
+  console.log(`💰 Partial payment processed: Paid ₦${amountPaid.toLocaleString()} → Org net: ₦${netToOrgFromThisPayment.toLocaleString()}, Remaining target: ₦${remainingOrgTarget.toLocaleString()}`);
   
-  let result = { remainingAmount: 0, outstandingPayment: null };
-  
-  if (isPartial) {
-    // Handle partial payment - create/update outstanding record
-    result = await createOrUpdateOutstandingPayment(payment, amountPaid, fees, reference);
-    payment.remainingAmount = result.remainingAmount;
-    payment.isPartial = result.remainingAmount > 0;
-    
-    console.log(`💰 Partial payment processed: Paid ₦${amountPaid.toFixed(2)} (Org gets ₦${fees.netToOrg.toFixed(2)}), Remaining: ₦${result.remainingAmount.toFixed(2)}`);
-  }
-  
-  await payment.save();
-  
-  // Record income for this payment (what org receives from this transaction)
-  await Income.create({
-    amount: fees.netToOrg,
-    source: `${payment.type} payment ${isPartial ? '(Partial)' : ''}`,
-    date: new Date(),
-    description: `Payment received. Member paid ₦${amountPaid.toFixed(2)}, fees: ₦${fees.totalFees.toFixed(2)}. ${result.remainingAmount > 0 ? `Outstanding balance: ₦${result.remainingAmount.toFixed(2)}` : 'Payment completed.'}`,
-    paymentId: payment._id,
-    paymentType: payment.type,
-    transactionReference: reference,
-    organizationId: payment.user?.organizationId,
-    metadata: { 
-      grossAmount: amountPaid,
-      paystackFee: fees.paystackFee,
-      platformFee: fees.platformFee,
-      netToOrg: fees.netToOrg,
-      isPartial,
-      remainingAmount: result.remainingAmount
-    }
-  });
-  
-  return result;
+  return {
+    amountPaid,
+    netToOrg: netToOrgFromThisPayment,
+    remainingTarget: remainingOrgTarget,
+    outstandingPayment
+  };
 };
 
 // ==================== VALIDATION RULES ====================
@@ -286,17 +253,15 @@ router.post('/initialize', protect, paymentInitLimiter, validatePaymentInit, asy
       return res.status(400).json({ success: false, message: 'Payment already completed' });
     }
     
-    // payment.amount is what organization should receive (target amount)
     const targetOrgAmount = payment.amount;
     const memberPayAmount = calculateMemberPayAmount(targetOrgAmount);
     
-    console.log(`💰 Target org amount: ₦${targetOrgAmount} → Member pays: ₦${memberPayAmount}`);
+    console.log(`💰 Target org amount: ₦${targetOrgAmount} → Member should pay: ₦${memberPayAmount} (includes fees)`);
     
     if (!validateAmount(memberPayAmount)) {
       return res.status(400).json({ success: false, message: 'Invalid payment amount calculation' });
     }
     
-    // Fetch organization subaccount
     let organizationSubaccount = null;
     let organization = null;
     
@@ -344,7 +309,7 @@ router.post('/initialize', protect, paymentInitLimiter, validatePaymentInit, asy
       }
     };
     
-    console.log('📤 Sending to Paystack with member amount:', memberPayAmount);
+    console.log('📤 Sending to Paystack with amount:', memberPayAmount);
     
     const response = await fetch('https://api.paystack.co/transaction/initialize', {
       method: 'POST',
@@ -427,122 +392,61 @@ router.get('/verify/:reference', verifyLimiter, validatePaymentVerification, asy
       const expectedAmount = payment.expectedAmount || payment.amount;
       
       // Check if this is a partial payment (member paid less than expected)
+      // Note: For bank transfers, this will be called with the actual amount paid
       const isPartialPayment = amountPaid < expectedAmount;
-      const fees = calculateFeesFromPaidAmount(amountPaid);
       
       let partialResult = null;
       
       if (isPartialPayment) {
-        // Handle partial payment with outstanding balance
-        partialResult = await processPaymentWithOutstanding(payment, amountPaid, fees, reference, true);
-        console.log(`⚠️ Partial payment detected! Paid: ₦${amountPaid}, Expected: ₦${expectedAmount}, Remaining: ₦${partialResult.remainingAmount}`);
+        // Process partial payment - organization target remains, fees apply to amount paid
+        partialResult = await processPartialPayment(payment, amountPaid, reference, false);
+        console.log(`⚠️ Partial payment! Paid: ₦${amountPaid}, Expected: ₦${expectedAmount}, Remaining target: ₦${partialResult.remainingTarget}`);
       } else {
         // Full payment - standard processing
+        const fees = calculateNetToOrganization(amountPaid);
+        
         payment.status = 'paid';
         payment.paidAt = new Date();
         payment.actualAmountPaid = amountPaid;
-        payment.paystackFeeDeducted = fees.paystackFee;
-        payment.afterPaystackAmount = fees.afterPaystack;
-        payment.platformFeeDeducted = fees.platformFee;
         payment.netToOrganization = fees.netToOrg;
+        payment.totalPaidSoFar = amountPaid;
+        payment.remainingAmount = 0;
         await payment.save();
+        
+        // Record INCOME
+        await Income.create({
+          amount: fees.netToOrg,
+          source: `${payment.type} payment`,
+          date: new Date(),
+          description: `Full payment received. Member paid ₦${amountPaid.toLocaleString()}, fees: ₦${fees.totalFees.toLocaleString()}`,
+          paymentId: payment._id,
+          paymentType: payment.type,
+          transactionReference: reference,
+          organizationId: payment.user?.organizationId,
+          metadata: { 
+            grossAmount: amountPaid,
+            netToOrg: fees.netToOrg,
+            fees: { paystackFee: fees.paystackFee, platformFee: fees.platformFee }
+          }
+        });
       }
       
       if (payment.type === 'registration') {
         await User.findByIdAndUpdate(payment.user, { hasPaidRegistration: true });
       }
       
-      // Record EXPENDITURE for Paystack fee (with idempotency check)
-      if (fees.paystackFee > 0) {
-        const alreadyExists = await hasExpenditureRecord(payment._id, 'paystack');
-        if (!alreadyExists) {
-          await Expenditure.create({
-            amount: fees.paystackFee,
-            purpose: 'Payment Processing Fee',
-            description: `Paystack transaction fee (${amountPaid >= 2500 ? '1.5% + ₦100' : '1.5%'}) for payment ${reference}`,
-            createdBy: payment.user._id,
-            organizationId: payment.user?.organizationId,
-            receipt: null,
-            metadata: {
-              feeType: 'paystack',
-              paymentId: payment._id,
-              transactionReference: reference,
-              grossAmount: amountPaid,
-              percentage: 1.5,
-              fixedFee: amountPaid >= 2500 ? 100 : 0,
-              isPartial: isPartialPayment,
-              timestamp: new Date().toISOString()
-            }
-          });
-          console.log(`💰 Recorded Paystack fee expenditure: ₦${fees.paystackFee.toFixed(2)}`);
-        }
-      }
-      
-      // Record EXPENDITURE for Platform fee (with idempotency check)
-      if (fees.platformFee > 0) {
-        const alreadyExists = await hasExpenditureRecord(payment._id, 'platform');
-        if (!alreadyExists) {
-          await Expenditure.create({
-            amount: fees.platformFee,
-            purpose: 'Platform Service Fee',
-            description: `Finlight platform fee (4% of after-Paystack amount) for payment ${reference}`,
-            createdBy: payment.user._id,
-            organizationId: payment.user?.organizationId,
-            receipt: null,
-            metadata: {
-              feeType: 'platform',
-              paymentId: payment._id,
-              transactionReference: reference,
-              afterPaystackAmount: fees.afterPaystack,
-              percentage: 4,
-              isPartial: isPartialPayment,
-              timestamp: new Date().toISOString()
-            }
-          });
-          console.log(`💰 Recorded Platform fee expenditure: ₦${fees.platformFee.toFixed(2)}`);
-        }
-      }
-      
-      // Record INCOME (what organization actually receives)
-      await Income.create({
-        amount: fees.netToOrg,
-        source: `${payment.type} payment ${isPartialPayment ? '(Partial)' : ''}`,
-        date: new Date(),
-        description: `Payment received. Member paid ₦${amountPaid.toFixed(2)}, fees: ₦${fees.totalFees.toFixed(2)}. ${partialResult?.remainingAmount > 0 ? `Outstanding balance: ₦${partialResult.remainingAmount.toFixed(2)}` : 'Payment completed.'}`,
-        paymentId: payment._id,
-        paymentType: payment.type,
-        transactionReference: reference,
-        organizationId: payment.user?.organizationId,
-        metadata: { 
-          grossAmount: amountPaid,
-          paystackFee: fees.paystackFee,
-          platformFee: fees.platformFee,
-          netToOrg: fees.netToOrg,
-          isPartial: isPartialPayment,
-          remainingAmount: partialResult?.remainingAmount || 0
-        }
-      });
-      
-      console.log(`✅ Payment verified: Member paid ₦${amountPaid.toFixed(2)} → Org receives: ₦${fees.netToOrg.toFixed(2)} (Fees: ₦${fees.totalFees.toFixed(2)})`);
+      console.log(`✅ Payment verified: Member paid ₦${amountPaid.toFixed(2)}`);
       
       res.status(200).json({
         success: true,
         data: { 
           status: payment.status, 
           amount: payment.amount,
-          isPartial: isPartialPayment,
-          remainingAmount: partialResult?.remainingAmount || 0,
-          breakdown: {
-            memberPaid: amountPaid,
-            expectedAmount: expectedAmount,
-            paystackFee: fees.paystackFee,
-            afterPaystack: fees.afterPaystack,
-            platformFee: fees.platformFee,
-            organizationReceives: fees.netToOrg,
-            totalFees: fees.totalFees
-          }
+          isPartial: isPartialPayment || false,
+          remainingAmount: partialResult?.remainingTarget || 0,
+          totalPaidSoFar: payment.totalPaidSoFar || amountPaid
         },
-        message: isPartialPayment ? 'Partial payment verified. Outstanding balance created.' : 'Payment verified successfully'
+        message: isPartialPayment ? `Partial payment of ₦${amountPaid.toLocaleString()} verified. Outstanding balance: ₦${partialResult?.remainingTarget.toLocaleString()}` : 'Payment verified successfully'
       });
     } else {
       res.status(400).json({ success: false, message: data.message || 'Payment verification failed' });
@@ -577,7 +481,7 @@ router.post('/webhook', webhookLimiter, async (req, res) => {
     console.log('📨 Webhook received:', event.event);
     
     if (event.event === 'charge.success') {
-      const { reference, amount, fees } = event.data;
+      const { reference, amount } = event.data;
       const payment = await Payment.findOne({ transactionReference: reference })
         .populate('user', 'organizationId');
       
@@ -586,69 +490,33 @@ router.post('/webhook', webhookLimiter, async (req, res) => {
         const expectedAmount = payment.expectedAmount || payment.amount;
         const isPartialPayment = amountPaid < expectedAmount;
         
-        const paystackFee = fees / 100;
-        const afterPaystack = amountPaid - paystackFee;
-        const platformFee = afterPaystack * 0.04;
-        const netToOrg = afterPaystack - platformFee;
-        const totalFees = paystackFee + platformFee;
-        
-        const feeData = {
-          amountPaid,
-          paystackFee,
-          afterPaystack,
-          platformFee,
-          netToOrg,
-          totalFees
-        };
-        
-        let partialResult = null;
-        
         if (isPartialPayment) {
-          partialResult = await processPaymentWithOutstanding(payment, amountPaid, feeData, reference, true);
-          console.log(`⚠️ Webhook - Partial payment! Paid: ₦${amountPaid}, Remaining: ₦${partialResult.remainingAmount}`);
+          await processPartialPayment(payment, amountPaid, reference, false);
+          console.log(`⚠️ Webhook - Partial payment! Paid: ₦${amountPaid}, Expected: ₦${expectedAmount}`);
         } else {
+          const fees = calculateNetToOrganization(amountPaid);
+          
           payment.status = 'paid';
           payment.paidAt = new Date();
           payment.actualAmountPaid = amountPaid;
-          payment.paystackFeeDeducted = paystackFee;
-          payment.afterPaystackAmount = afterPaystack;
-          payment.platformFeeDeducted = platformFee;
-          payment.netToOrganization = netToOrg;
+          payment.netToOrganization = fees.netToOrg;
+          payment.totalPaidSoFar = amountPaid;
+          payment.remainingAmount = 0;
           await payment.save();
+          
+          await Income.create({
+            amount: fees.netToOrg,
+            source: `${payment.type} payment`,
+            date: new Date(),
+            description: `Payment received via webhook. Member paid ₦${amountPaid.toLocaleString()}`,
+            paymentId: payment._id,
+            paymentType: payment.type,
+            transactionReference: reference,
+            organizationId: payment.user?.organizationId
+          });
         }
         
-        // Create expenditure records
-        if (paystackFee > 0) {
-          const alreadyExists = await hasExpenditureRecord(payment._id, 'paystack');
-          if (!alreadyExists) {
-            await Expenditure.create({
-              amount: paystackFee,
-              purpose: 'Payment Processing Fee',
-              description: `Paystack fee for payment ${reference}`,
-              createdBy: payment.user?._id,
-              organizationId: payment.user?.organizationId,
-              metadata: { feeType: 'paystack', paymentId: payment._id, isPartial: isPartialPayment }
-            });
-            console.log(`💰 Webhook - Recorded Paystack fee: ₦${paystackFee.toFixed(2)}`);
-          }
-        }
-        
-        if (platformFee > 0) {
-          const alreadyExists = await hasExpenditureRecord(payment._id, 'platform');
-          if (!alreadyExists) {
-            await Expenditure.create({
-              amount: platformFee,
-              purpose: 'Platform Service Fee',
-              description: `Finlight platform fee for payment ${reference}`,
-              createdBy: payment.user?._id,
-              organizationId: payment.user?.organizationId,
-              metadata: { feeType: 'platform', paymentId: payment._id, isPartial: isPartialPayment }
-            });
-            console.log(`💰 Webhook - Recorded Platform fee: ₦${platformFee.toFixed(2)}`);
-          }
-        }
-        
-        console.log(`✅ Webhook processed: Member paid ₦${amountPaid.toFixed(2)} → Org receives: ₦${netToOrg.toFixed(2)}`);
+        console.log(`✅ Webhook processed: Member paid ₦${amountPaid.toFixed(2)}`);
       }
     }
     
@@ -659,11 +527,8 @@ router.post('/webhook', webhookLimiter, async (req, res) => {
   }
 });
 
-// ==================== PARTIAL PAYMENT ENDPOINT ====================
+// ==================== PARTIAL PAYMENT ENDPOINT (Admin for Bank Transfers) ====================
 
-/**
- * Admin endpoint to record manual partial payments (bank transfers)
- */
 router.post('/record-partial-payment', protect, async (req, res) => {
   try {
     const { paymentId, amountPaid, reference, notes } = req.body;
@@ -682,18 +547,24 @@ router.post('/record-partial-payment', protect, async (req, res) => {
       return res.status(400).json({ success: false, message: 'Payment already completed' });
     }
     
-    const fees = calculateFeesFromPaidAmount(amountPaid);
-    const result = await processPaymentWithOutstanding(originalPayment, amountPaid, fees, reference || `MANUAL-${Date.now()}`, true);
+    if (!amountPaid || amountPaid <= 0) {
+      return res.status(400).json({ success: false, message: 'Valid amount is required' });
+    }
+    
+    const result = await processPartialPayment(originalPayment, amountPaid, reference || `MANUAL-${Date.now()}`, true);
     
     res.status(200).json({
       success: true,
       data: {
         payment: originalPayment,
-        remainingAmount: result.remainingAmount,
-        outstandingPayment: result.outstandingPayment,
-        fees
+        amountPaid: result.amountPaid,
+        netToOrg: result.netToOrg,
+        remainingTarget: result.remainingTarget,
+        outstandingPayment: result.outstandingPayment
       },
-      message: result.remainingAmount > 0 ? 'Partial payment recorded. Outstanding balance created.' : 'Payment completed successfully.'
+      message: result.remainingTarget > 0 
+        ? `Partial payment of ₦${amountPaid.toLocaleString()} recorded. Organization receives ₦${result.netToOrg.toLocaleString()}. Outstanding balance: ₦${result.remainingTarget.toLocaleString()}`
+        : 'Payment completed successfully'
     });
   } catch (error) {
     console.error('Record partial payment error:', error);
@@ -709,7 +580,6 @@ router.get('/outstanding', protect, async (req, res) => {
       user: req.user.id,
       status: 'unpaid',
       type: 'outstanding',
-      isPartial: true,
       remainingAmount: { $gt: 0 }
     };
     
