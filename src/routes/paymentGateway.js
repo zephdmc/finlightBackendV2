@@ -391,15 +391,28 @@ router.all('/webhook-test', (req, res) => {
 });
 
 
-router.post('/webhook', express.raw({ type: 'application/json' }), webhookLimiter, async (req, res) => {
+// ==================== PAYMENT WEBHOOK (FIXED VERSION) ====================
+router.post('/webhook', webhookLimiter, async (req, res) => {
   try {
-    const hash = crypto.createHmac('sha512', PAYSTACK_SECRET_KEY).update(JSON.stringify(req.body)).digest('hex');
+    // Get the raw body from the request
+    let rawBody;
+    if (req.rawBody) {
+      rawBody = req.rawBody;
+    } else {
+      rawBody = JSON.stringify(req.body);
+    }
+    
+    const hash = crypto.createHmac('sha512', PAYSTACK_SECRET_KEY)
+      .update(rawBody)
+      .digest('hex');
     
     if (hash !== req.headers['x-paystack-signature']) {
+      console.log('❌ Invalid webhook signature');
       return res.status(401).json({ success: false });
     }
     
     const event = req.body;
+    console.log('📨 Webhook received:', event.event);
     
     if (event.event === 'charge.success') {
       const { reference, amount, fees } = event.data;
@@ -423,20 +436,9 @@ router.post('/webhook', express.raw({ type: 'application/json' }), webhookLimite
         payment.netToOrganization = netToOrg;
         await payment.save();
         
-        // Gross Income Record
-        await Income.create({
-          amount: amountPaid,
-          source: `${payment.type} payment (Gross)`,
-          date: new Date(),
-          description: `Gross payment before fee deductions`,
-          paymentId: payment._id,
-          paymentType: payment.type,
-          transactionReference: reference,
-          organizationId: payment.user?.organizationId,
-          metadata: { isGrossAmount: true, fees: { paystackFee, platformFee, netToOrg } }
-        });
+        console.log(`✅ Webhook processed: ₦${amountPaid} → Org net: ₦${netToOrg.toFixed(2)}`);
         
-        // Paystack Fee Expenditure (with idempotency check)
+        // Create expenditure records (same as before)
         if (paystackFee > 0) {
           const alreadyExists = await hasExpenditureRecord(payment._id, 'paystack');
           if (!alreadyExists) {
@@ -448,11 +450,10 @@ router.post('/webhook', express.raw({ type: 'application/json' }), webhookLimite
               organizationId: payment.user?.organizationId,
               metadata: { feeType: 'paystack', paymentId: payment._id }
             });
-            console.log(`💰 Webhook - Recorded Paystack fee: ₦${paystackFee.toFixed(2)}`);
+            console.log(`💰 Recorded Paystack fee: ₦${paystackFee.toFixed(2)}`);
           }
         }
         
-        // Platform Fee Expenditure (with idempotency check)
         if (platformFee > 0) {
           const alreadyExists = await hasExpenditureRecord(payment._id, 'platform');
           if (!alreadyExists) {
@@ -464,24 +465,9 @@ router.post('/webhook', express.raw({ type: 'application/json' }), webhookLimite
               organizationId: payment.user?.organizationId,
               metadata: { feeType: 'platform', paymentId: payment._id }
             });
-            console.log(`💰 Webhook - Recorded Platform fee: ₦${platformFee.toFixed(2)}`);
+            console.log(`💰 Recorded Platform fee: ₦${platformFee.toFixed(2)}`);
           }
         }
-        
-        // Net Income Record
-        await Income.create({
-          amount: netToOrg,
-          source: `${payment.type} payment (Net)`,
-          date: new Date(),
-          description: `Net amount after fee deductions`,
-          paymentId: payment._id,
-          paymentType: payment.type,
-          transactionReference: reference,
-          organizationId: payment.user?.organizationId,
-          metadata: { isNetAmount: true, netToOrg, totalFees }
-        });
-        
-        console.log(`✅ Webhook processed: ₦${amountPaid} → Org net: ₦${netToOrg.toFixed(2)}`);
       }
     }
     

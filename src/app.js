@@ -55,7 +55,7 @@ const userRoutes = require('./routes/users');
 const paymentRoutes = require('./routes/payments');
 const paymentTypeRoutes = require('./routes/paymentTypes');
 const transactionRoutes = require('./routes/transactions');
-const paymentGatewayRoutes = require('./routes/paymentGateway');
+// const paymentGatewayRoutes = require('./routes/paymentGateway');
 const reportRoutes = require('./routes/reports');
 const errorHandler = require('./middleware/errorHandler');
 const adminRoutes = require('./routes/adminRoutes');
@@ -244,6 +244,17 @@ app.use('/api/transactions', transactionRoutes);
 app.use('/api/reports', reportRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/organizations', organizationRoutes);
+
+// Add this BEFORE the payment gateway routes
+app.use(express.json({ 
+  limit: '10kb',
+  verify: (req, res, buf, encoding) => {
+    req.rawBody = buf.toString();
+  }
+}));
+
+// Then your payment gateway routes
+const paymentGatewayRoutes = require('./routes/paymentGateway');
 app.use('/api/payment-gateway', paymentGatewayRoutes);
 
 // ==================== PAYMENT GATEWAY ROUTES ====================
