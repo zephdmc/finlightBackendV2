@@ -9,6 +9,7 @@ const User = require('../models/User');
 const Income = require('../models/Income');
 const Organization = require('../models/Organization');
 const { body, param } = require('express-validator');
+const Expenditure = require('../models/Expenditure'); // Add this import
 
 const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY;
 const PLATFORM_SUBACCOUNT = process.env.PLATFORM_SUBACCOUNT;
@@ -188,14 +189,13 @@ router.get('/verify/:reference', verifyLimiter, validatePaymentVerification, asy
   try {
     const { reference } = req.params;
     
-    console.log('🔍 Verifying payment:', reference);
-    
-    let payment = await Payment.findOne({ transactionReference: reference });
+    let payment = await Payment.findOne({ transactionReference: reference })
+      .populate('user', 'name email organizationId');
     
     if (!payment) {
       const match = reference.match(/PAY-([a-f0-9]+)-/);
       if (match && match[1]) {
-        payment = await Payment.findById(match[1]);
+        payment = await Payment.findById(match[1]).populate('user', 'name email organizationId');
       }
     }
     
@@ -224,7 +224,9 @@ router.get('/verify/:reference', verifyLimiter, validatePaymentVerification, asy
       const afterPaystack = amountPaid - paystackFee;
       const platformFee = afterPaystack * 0.04;
       const netToOrg = afterPaystack - platformFee;
+      const totalFees = paystackFee + platformFee;
       
+      // Update payment with fee breakdown
       payment.status = 'paid';
       payment.paidAt = new Date();
       payment.actualAmountPaid = amountPaid;
@@ -238,23 +240,107 @@ router.get('/verify/:reference', verifyLimiter, validatePaymentVerification, asy
         await User.findByIdAndUpdate(payment.user, { hasPaidRegistration: true });
       }
       
+      // ==================== TRANSPARENT RECORD KEEPING ====================
+      
+      // ✅ 1. Record INCOME (what member paid - for transparency)
       await Income.create({
-        amount: payment.amount,
-        source: `${payment.type} payment`,
+        amount: amountPaid,
+        source: `${payment.type} payment (Gross)`,
         date: new Date(),
-        description: payment.description || `${payment.type} payment via Paystack`,
+        description: `Gross payment received from member - Before fee deductions`,
         paymentId: payment._id,
         paymentType: payment.type,
         transactionReference: reference,
-        organizationId: payment.user.organizationId,
-        metadata: { paystackFees: data.data.fees, platformFee, netToOrg }
+        organizationId: payment.user?.organizationId,
+        metadata: { 
+          isGrossAmount: true,
+          feeBreakdown: {
+            paystackFee,
+            platformFee,
+            totalFees,
+            netToOrg
+          }
+        }
       });
       
-      console.log(`✅ Payment verified: ₦${amountPaid}, Org gets: ₦${netToOrg.toFixed(2)}`);
+      // ✅ 2. Record EXPENDITURE for Paystack fee
+      if (paystackFee > 0) {
+        await Expenditure.create({
+          amount: paystackFee,
+          purpose: 'Payment Processing Fee',
+          description: `Paystack transaction fee (${amountPaid >= 2500 ? '1.5% + ₦100' : '1.5%'}) for payment ${reference}`,
+          createdBy: payment.user._id,
+          organizationId: payment.user?.organizationId,
+          receipt: null,
+          metadata: {
+            feeType: 'paystack',
+            paymentId: payment._id,
+            transactionReference: reference,
+            grossAmount: amountPaid,
+            percentage: 1.5,
+            fixedFee: amountPaid >= 2500 ? 100 : 0,
+            timestamp: new Date().toISOString()
+          }
+        });
+        console.log(`💰 Recorded Paystack fee expenditure: ₦${paystackFee.toFixed(2)}`);
+      }
+      
+      // ✅ 3. Record EXPENDITURE for Platform fee
+      if (platformFee > 0) {
+        await Expenditure.create({
+          amount: platformFee,
+          purpose: 'Platform Service Fee',
+          description: `Finlight platform fee (4% of after-Paystack amount) for payment ${reference}`,
+          createdBy: payment.user._id,
+          organizationId: payment.user?.organizationId,
+          receipt: null,
+          metadata: {
+            feeType: 'platform',
+            paymentId: payment._id,
+            transactionReference: reference,
+            afterPaystackAmount: afterPaystack,
+            percentage: 4,
+            timestamp: new Date().toISOString()
+          }
+        });
+        console.log(`💰 Recorded Platform fee expenditure: ₦${platformFee.toFixed(2)}`);
+      }
+      
+      // ✅ 4. Record NET INCOME (what organization actually receives)
+      await Income.create({
+        amount: netToOrg,
+        source: `${payment.type} payment (Net after fees)`,
+        date: new Date(),
+        description: `Net amount after deducting Paystack (₦${paystackFee.toFixed(2)}) and Platform (₦${platformFee.toFixed(2)}) fees`,
+        paymentId: payment._id,
+        paymentType: payment.type,
+        transactionReference: reference,
+        organizationId: payment.user?.organizationId,
+        metadata: { 
+          isNetAmount: true,
+          grossAmount: amountPaid,
+          paystackFee,
+          platformFee,
+          totalFees
+        }
+      });
+      
+      console.log(`✅ Payment verified: ₦${amountPaid} → Org net: ₦${netToOrg.toFixed(2)} (Fees: ₦${totalFees.toFixed(2)})`);
       
       res.status(200).json({
         success: true,
-        data: { status: payment.status, amount: payment.amount },
+        data: { 
+          status: payment.status, 
+          amount: payment.amount,
+          breakdown: {
+            gross: amountPaid,
+            paystackFee,
+            afterPaystack,
+            platformFee,
+            netToOrg,
+            totalFees
+          }
+        },
         message: 'Payment verified successfully'
       });
     } else {
@@ -280,15 +366,16 @@ router.post('/webhook', express.raw({ type: 'application/json' }), webhookLimite
     
     if (event.event === 'charge.success') {
       const { reference, amount, fees } = event.data;
-      const payment = await Payment.findOne({ transactionReference: reference });
+      const payment = await Payment.findOne({ transactionReference: reference })
+        .populate('user', 'organizationId');
       
       if (payment && payment.status !== 'paid') {
-        // ✅ Calculate fees here too
         const amountPaid = amount / 100;
         const paystackFee = fees / 100;
         const afterPaystack = amountPaid - paystackFee;
         const platformFee = afterPaystack * 0.04;
         const netToOrg = afterPaystack - platformFee;
+        const totalFees = paystackFee + platformFee;
         
         payment.status = 'paid';
         payment.paidAt = new Date();
@@ -297,21 +384,59 @@ router.post('/webhook', express.raw({ type: 'application/json' }), webhookLimite
         payment.afterPaystackAmount = afterPaystack;
         payment.platformFeeDeducted = platformFee;
         payment.netToOrganization = netToOrg;
-        
         await payment.save();
         
-        // Also create Income record
+        // Gross Income Record
         await Income.create({
-          amount: payment.amount,
-          source: `${payment.type} payment`,
+          amount: amountPaid,
+          source: `${payment.type} payment (Gross)`,
           date: new Date(),
-          description: payment.description,
+          description: `Gross payment before fee deductions`,
           paymentId: payment._id,
           paymentType: payment.type,
           transactionReference: reference,
           organizationId: payment.user?.organizationId,
-          metadata: { paystackFee, platformFee, netToOrg }
+          metadata: { isGrossAmount: true, fees: { paystackFee, platformFee, netToOrg } }
         });
+        
+        // Paystack Fee Expenditure
+        if (paystackFee > 0) {
+          await Expenditure.create({
+            amount: paystackFee,
+            purpose: 'Payment Processing Fee',
+            description: `Paystack fee for payment ${reference}`,
+            createdBy: payment.user?._id,
+            organizationId: payment.user?.organizationId,
+            metadata: { feeType: 'paystack', paymentId: payment._id }
+          });
+        }
+        
+        // Platform Fee Expenditure
+        if (platformFee > 0) {
+          await Expenditure.create({
+            amount: platformFee,
+            purpose: 'Platform Service Fee',
+            description: `Finlight platform fee for payment ${reference}`,
+            createdBy: payment.user?._id,
+            organizationId: payment.user?.organizationId,
+            metadata: { feeType: 'platform', paymentId: payment._id }
+          });
+        }
+        
+        // Net Income Record
+        await Income.create({
+          amount: netToOrg,
+          source: `${payment.type} payment (Net)`,
+          date: new Date(),
+          description: `Net amount after fee deductions`,
+          paymentId: payment._id,
+          paymentType: payment.type,
+          transactionReference: reference,
+          organizationId: payment.user?.organizationId,
+          metadata: { isNetAmount: true, netToOrg, totalFees }
+        });
+        
+        console.log(`✅ Webhook processed: ₦${amountPaid} → Org net: ₦${netToOrg.toFixed(2)}`);
       }
     }
     
@@ -321,6 +446,7 @@ router.post('/webhook', express.raw({ type: 'application/json' }), webhookLimite
     res.status(200).json({ success: false });
   }
 });
+
 // ==================== PAYMENT STATUS CHECK ====================
 
 router.get('/status/:paymentId', protect, statusCheckLimiter, ValidationMiddleware.idParam, async (req, res) => {
