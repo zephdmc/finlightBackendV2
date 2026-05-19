@@ -3,51 +3,145 @@ const Payment = require('../models/Payment');
 const User = require('../models/User');
 const Income = require('../models/Income');
 const PaymentType = require('../models/PaymentType');
+const Expenditure = require('../models/Expenditure');
 const crypto = require('crypto');
 
-// Helper function for partial payments (now includes organizationId on outstanding payment)
-const handlePartialPayment = async (originalPayment, amountPaid, reference) => {
-  const expectedAmount = originalPayment.expectedAmount || originalPayment.amount;
-  const remainingAmount = expectedAmount - amountPaid;
+// ==================== HELPER FUNCTIONS ====================
+
+/**
+ * Handle partial payment and create outstanding balance record
+ */
+const handlePartialPayment = async (originalPayment, amountPaid, reference, notes = '') => {
+  const targetAmount = originalPayment.targetOrgAmount || originalPayment.amount;
+  const totalPaidSoFar = (originalPayment.totalPaidSoFar || 0) + amountPaid;
+  const remainingAmount = targetAmount - totalPaidSoFar;
   
-  console.log(`Partial payment detected: Expected ${expectedAmount}, Paid ${amountPaid}, Remaining ${remainingAmount}`);
+  console.log(`Partial payment detected: Target ${targetAmount}, Paid ${amountPaid}, Total Paid ${totalPaidSoFar}, Remaining ${remainingAmount}`);
   
-  // Update original payment as partial
-  originalPayment.paidAmount = amountPaid;
+  // Calculate fees for this partial payment
+  const paystackFee = amountPaid * 0.015 + (amountPaid >= 2500 ? 100 : 0);
+  const finalPaystackFee = Math.min(paystackFee, 2000);
+  const afterPaystack = amountPaid - finalPaystackFee;
+  const platformFee = afterPaystack * 0.04;
+  const netToOrg = afterPaystack - platformFee;
+  
+  // Update original payment with partial payment info
+  originalPayment.totalPaidSoFar = totalPaidSoFar;
   originalPayment.remainingAmount = remainingAmount;
-  originalPayment.isPartial = true;
-  originalPayment.status = 'partial';
-  originalPayment.paidAt = new Date();
-  originalPayment.transactionReference = reference;
-  await originalPayment.save();
-  
-  // Create outstanding payment record for remaining amount (include organizationId)
-  const outstandingPayment = await Payment.create({
-    user: originalPayment.user,
-    name: `${originalPayment.name} (Outstanding Balance)`,
-    type: originalPayment.type,
-    amount: remainingAmount,
-    expectedAmount: remainingAmount,
-    paidAmount: 0,
-    remainingAmount: remainingAmount,
-    isPartial: false,
-    parentPaymentId: originalPayment._id,
-    paymentTypeId: originalPayment.paymentTypeId,
-    organizationId: originalPayment.organizationId,
-    description: `Remaining balance of ₦${remainingAmount.toLocaleString()} for ${originalPayment.name}`,
-    status: 'unpaid',
-    dueDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
+  originalPayment.isPartial = remainingAmount > 0;
+  originalPayment.status = remainingAmount > 0 ? 'partial' : 'paid';
+  originalPayment.partialPayments = originalPayment.partialPayments || [];
+  originalPayment.partialPayments.push({
+    amount: amountPaid,
+    netToOrg: netToOrg,
+    date: new Date(),
+    transactionReference: reference,
+    fees: {
+      paystackFee: finalPaystackFee,
+      platformFee: platformFee,
+      totalFees: finalPaystackFee + platformFee
+    },
+    notes: notes
   });
   
-  console.log(`Created outstanding payment record: ${outstandingPayment._id} for amount ${remainingAmount}`);
+  if (remainingAmount <= 0) {
+    originalPayment.paidAt = new Date();
+  }
+  
+  await originalPayment.save();
+  
+  let outstandingPayment = null;
+  
+  // Create or update outstanding payment record for remaining amount
+  if (remainingAmount > 0) {
+    outstandingPayment = await Payment.findOne({
+      parentPaymentId: originalPayment._id,
+      type: 'outstanding',
+      status: 'unpaid'
+    });
+    
+    if (outstandingPayment) {
+      // Update existing outstanding payment
+      outstandingPayment.amount = remainingAmount;
+      outstandingPayment.targetOrgAmount = remainingAmount;
+      outstandingPayment.remainingAmount = remainingAmount;
+      outstandingPayment.description = `Remaining balance of ₦${remainingAmount.toLocaleString()} for ${originalPayment.name}`;
+      await outstandingPayment.save();
+    } else {
+      // Create new outstanding payment record
+      outstandingPayment = await Payment.create({
+        user: originalPayment.user,
+        name: `${originalPayment.name} (Outstanding Balance)`,
+        type: 'outstanding',
+        amount: remainingAmount,
+        targetOrgAmount: remainingAmount,
+        expectedAmount: remainingAmount,
+        remainingAmount: remainingAmount,
+        totalPaidSoFar: 0,
+        isPartial: false,
+        parentPaymentId: originalPayment._id,
+        paymentTypeId: originalPayment.paymentTypeId,
+        organizationId: originalPayment.organizationId,
+        description: `Remaining balance of ₦${remainingAmount.toLocaleString()} for ${originalPayment.name}`,
+        status: 'unpaid',
+        dueDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
+      });
+    }
+    
+    console.log(`Created/Updated outstanding payment record: ${outstandingPayment._id} for amount ${remainingAmount}`);
+  }
+  
+  // Record income for this partial payment
+  await Income.create({
+    amount: netToOrg,
+    source: `${originalPayment.type} payment (Partial)`,
+    date: new Date(),
+    description: `Partial payment of ₦${amountPaid.toLocaleString()} received. Fees: ₦${(finalPaystackFee + platformFee).toLocaleString()}. ${remainingAmount > 0 ? `Remaining: ₦${remainingAmount.toLocaleString()}` : 'Payment completed.'}`,
+    paymentId: originalPayment._id,
+    paymentType: originalPayment.type,
+    transactionReference: reference,
+    organizationId: originalPayment.organizationId,
+    metadata: {
+      isPartial: true,
+      partialAmount: amountPaid,
+      remainingAmount: remainingAmount,
+      fees: { paystackFee: finalPaystackFee, platformFee }
+    }
+  });
+  
+  // Record expenditures for fees
+  if (finalPaystackFee > 0) {
+    await Expenditure.create({
+      amount: finalPaystackFee,
+      purpose: 'Payment Processing Fee',
+      description: `Paystack fee for partial payment ${reference}`,
+      createdBy: originalPayment.user,
+      organizationId: originalPayment.organizationId,
+      metadata: { feeType: 'paystack', paymentId: originalPayment._id, isPartial: true }
+    });
+  }
+  
+  if (platformFee > 0) {
+    await Expenditure.create({
+      amount: platformFee,
+      purpose: 'Platform Service Fee',
+      description: `Platform fee for partial payment ${reference}`,
+      createdBy: originalPayment.user,
+      organizationId: originalPayment.organizationId,
+      metadata: { feeType: 'platform', paymentId: originalPayment._id, isPartial: true }
+    });
+  }
   
   return {
     isPartial: true,
     paidAmount: amountPaid,
     remainingAmount: remainingAmount,
+    netToOrg: netToOrg,
     outstandingPayment: outstandingPayment
   };
 };
+
+// ==================== PAYMENT CONTROLLER METHODS ====================
 
 // @desc    Create direct payment (Admin only - no Paystack)
 // @route   POST /api/payments/admin-direct
@@ -66,7 +160,6 @@ exports.createAdminDirectPayment = async (req, res, next) => {
       });
     }
 
-    // Verify that the target user belongs to the same organization
     const targetUser = await User.findOne({ _id: userId, organizationId: organizationId });
     if (!targetUser) {
       return res.status(403).json({
@@ -89,7 +182,6 @@ exports.createAdminDirectPayment = async (req, res, next) => {
       });
     }
 
-    // Check for existing paid payment of same type (scoped to organization)
     const existingPayment = await Payment.findOne({
       user: userId,
       paymentTypeId: paymentTypeId,
@@ -117,6 +209,10 @@ exports.createAdminDirectPayment = async (req, res, next) => {
       user: userId,
       type: type,
       amount: amount,
+      targetOrgAmount: amount,
+      expectedAmount: amount,
+      remainingAmount: 0,
+      totalPaidSoFar: amount,
       dueDate: dueDate || null,
       description: description || `${type} payment recorded by admin`,
       paymentTypeId: paymentTypeId || null,
@@ -132,24 +228,17 @@ exports.createAdminDirectPayment = async (req, res, next) => {
       await User.findByIdAndUpdate(userId, { hasPaidRegistration: true });
     }
 
-    // Record as income with organizationId
-    try {
-      const incomeData = {
-        amount: payment.amount,
-        source: `${type} - ${description || 'Payment'}`,
-        date: payment.paidAt || new Date(),
-        description: description || `${type} payment recorded by admin`,
-        paymentId: payment._id,
-        paymentType: type,
-        userId: userId,
-        organizationId: organizationId,
-        transactionReference: payment.transactionReference
-      };
-      await Income.create(incomeData);
-      console.log('Income recorded for admin payment:', payment._id);
-    } catch (incomeError) {
-      console.error('Failed to record income:', incomeError);
-    }
+    await Income.create({
+      amount: payment.amount,
+      source: `${type} - ${description || 'Payment'}`,
+      date: payment.paidAt || new Date(),
+      description: description || `${type} payment recorded by admin`,
+      paymentId: payment._id,
+      paymentType: type,
+      userId: userId,
+      organizationId: organizationId,
+      transactionReference: payment.transactionReference
+    });
 
     res.status(201).json({
       success: true,
@@ -173,28 +262,22 @@ exports.getOutstandingPayments = async (req, res, next) => {
     const outstandingPayments = await Payment.find({
       user: userId,
       organizationId: organizationId,
-      status: 'unpaid',
-      name: { $regex: 'Outstanding Balance', $options: 'i' }
+      status: { $in: ['unpaid', 'partial'] },
+      remainingAmount: { $gt: 0 }
     }).populate('paymentTypeId', 'name description');
 
-    const regularUnpaid = await Payment.find({
-      user: userId,
-      organizationId: organizationId,
-      status: 'unpaid',
-      name: { $not: { $regex: 'Outstanding Balance', $options: 'i' } }
-    }).populate('paymentTypeId', 'name description');
-
-    const allOutstanding = [...regularUnpaid, ...outstandingPayments];
+    const totalOutstanding = outstandingPayments.reduce((sum, p) => sum + (p.remainingAmount || p.amount), 0);
 
     res.status(200).json({
       success: true,
-      data: allOutstanding,
+      data: outstandingPayments,
       summary: {
-        totalOutstanding: allOutstanding.reduce((sum, p) => sum + p.amount, 0),
-        count: allOutstanding.length
+        totalOutstanding: totalOutstanding,
+        count: outstandingPayments.length
       }
     });
   } catch (error) {
+    console.error('Get outstanding payments error:', error);
     next(error);
   }
 };
@@ -206,9 +289,6 @@ exports.markFineAsPaid = async (req, res, next) => {
   try {
     const { paidAt } = req.body;
     const organizationId = req.user.organizationId;
-
-    console.log('=== MARK FINE AS PAID ===');
-    console.log('Fine ID:', req.params.id);
 
     const payment = await Payment.findOne({
       _id: req.params.id,
@@ -238,25 +318,21 @@ exports.markFineAsPaid = async (req, res, next) => {
 
     payment.status = 'paid';
     payment.paidAt = paidAt || new Date();
+    payment.remainingAmount = 0;
+    payment.totalPaidSoFar = payment.amount;
     await payment.save();
 
-    try {
-      const incomeData = {
-        amount: payment.amount,
-        source: `Fine - ${payment.description || 'Penalty'}`,
-        date: payment.paidAt,
-        description: payment.description || `Fine payment from ${payment.user?.name}`,
-        paymentId: payment._id,
-        paymentType: 'fine',
-        userId: payment.user,
-        organizationId: organizationId,
-        transactionReference: payment.transactionReference
-      };
-      await Income.create(incomeData);
-      console.log('Income recorded for fine payment:', payment._id);
-    } catch (incomeError) {
-      console.error('Failed to record income for fine:', incomeError);
-    }
+    await Income.create({
+      amount: payment.amount,
+      source: `Fine - ${payment.description || 'Penalty'}`,
+      date: payment.paidAt,
+      description: payment.description || `Fine payment from ${payment.user?.name}`,
+      paymentId: payment._id,
+      paymentType: 'fine',
+      userId: payment.user,
+      organizationId: organizationId,
+      transactionReference: payment.transactionReference
+    });
 
     res.status(200).json({
       success: true,
@@ -320,6 +396,11 @@ exports.createPayment = async (req, res, next) => {
       name: name,
       type: type,
       amount: amount,
+      targetOrgAmount: amount,
+      expectedAmount: amount,
+      remainingAmount: amount,
+      totalPaidSoFar: 0,
+      isPartial: false,
       dueDate: dueDate || null,
       description: description || '',
       paymentTypeId: paymentTypeId || null,
@@ -353,15 +434,15 @@ exports.getPublicSummary = async (req, res, next) => {
     const [totalPaidResult, totalOutstandingResult, paymentCounts, monthlyPayments] = await Promise.all([
       Payment.aggregate([
         { $match: matchCondition },
-        { $group: { _id: null, total: { $sum: '$amount' } } }
+        { $group: { _id: null, total: { $sum: '$netToOrganization' } } }
       ]),
       Payment.aggregate([
-        { $match: { ...matchCondition, status: 'unpaid' } },
-        { $group: { _id: null, total: { $sum: '$amount' } } }
+        { $match: { ...matchCondition, status: { $in: ['unpaid', 'partial'] }, remainingAmount: { $gt: 0 } } },
+        { $group: { _id: null, total: { $sum: '$remainingAmount' } } }
       ]),
       Payment.aggregate([
         { $match: matchCondition },
-        { $group: { _id: '$type', count: { $sum: 1 }, total: { $sum: '$amount' } } }
+        { $group: { _id: '$type', count: { $sum: 1 }, total: { $sum: '$netToOrganization' } } }
       ]),
       Payment.aggregate([
         { 
@@ -373,7 +454,7 @@ exports.getPublicSummary = async (req, res, next) => {
         {
           $group: {
             _id: { year: { $year: '$paidAt' }, month: { $month: '$paidAt' } },
-            total: { $sum: '$amount' },
+            total: { $sum: '$netToOrganization' },
             count: { $sum: 1 }
           }
         },
@@ -422,24 +503,9 @@ exports.getPaymentById = async (req, res, next) => {
       });
     }
 
-    const safePayment = {
-      _id: payment._id,
-      user: payment.user,
-      type: payment.type,
-      amount: payment.amount,
-      status: payment.status,
-      dueDate: payment.dueDate,
-      paidAt: payment.paidAt,
-      description: payment.description,
-      transactionReference: payment.transactionReference,
-      paymentTypeId: payment.paymentTypeId,
-      createdAt: payment.createdAt,
-      updatedAt: payment.updatedAt
-    };
-
     res.status(200).json({
       success: true,
-      data: safePayment
+      data: payment
     });
   } catch (error) {
     console.error('Get payment by ID error:', error);
@@ -486,17 +552,19 @@ exports.getPublicIncome = async (req, res, next) => {
       
       return {
         _id: payment._id,
-        amount: payment.amount,
+        amount: payment.netToOrganization || payment.amount,
         description: description,
         source: source,
         date: payment.paidAt || payment.createdAt,
         type: 'member_payment',
         memberName: payment.user?.name || 'Member',
-        paymentType: source
+        paymentType: source,
+        isPartial: payment.isPartial,
+        remainingAmount: payment.remainingAmount
       };
     });
     
-    const totalCollected = payments.reduce((sum, p) => sum + (p.amount || 0), 0);
+    const totalCollected = payments.reduce((sum, p) => sum + (p.netToOrganization || p.amount || 0), 0);
     
     res.status(200).json({
       success: true,
@@ -542,11 +610,11 @@ exports.getPaymentSummary = async (req, res, next) => {
           $group: {
             _id: null,
             totalAmount: { $sum: '$amount' },
-            totalPaid: { $sum: { $cond: [{ $eq: ['$status', 'paid'] }, '$amount', 0] } },
-            totalUnpaid: { $sum: { $cond: [{ $eq: ['$status', 'unpaid'] }, '$amount', 0] } },
+            totalPaid: { $sum: { $cond: [{ $eq: ['$status', 'paid'] }, '$netToOrganization', 0] } },
+            totalUnpaid: { $sum: { $cond: [{ $in: ['$status', ['unpaid', 'partial']] }, '$remainingAmount', 0] } },
             count: { $sum: 1 },
             paidCount: { $sum: { $cond: [{ $eq: ['$status', 'paid'] }, 1, 0] } },
-            unpaidCount: { $sum: { $cond: [{ $eq: ['$status', 'unpaid'] }, 1, 0] } }
+            unpaidCount: { $sum: { $cond: [{ $in: ['$status', ['unpaid', 'partial']] }, 1, 0] } }
           }
         }
       ]),
@@ -603,7 +671,6 @@ exports.getAllPayments = async (req, res, next) => {
     const organizationId = req.user.organizationId;
     
     console.log('Getting all payments for organization:', organizationId);
-    console.log('User role:', req.user.role);
     
     if (!organizationId && req.user.role !== 'super-admin') {
       return res.status(400).json({
@@ -618,7 +685,6 @@ exports.getAllPayments = async (req, res, next) => {
       console.log('Super admin - fetching all payments');
     } else {
       query.organizationId = organizationId;
-      console.log('Admin - filtering by organization:', organizationId);
     }
     
     const { status, type, userId, startDate, endDate, page = 1, limit = 20 } = req.query;
@@ -651,13 +717,15 @@ exports.getAllPayments = async (req, res, next) => {
         $group: {
           _id: '$status',
           total: { $sum: '$amount' },
+          netTotal: { $sum: '$netToOrganization' },
           count: { $sum: 1 }
         }
       }
     ]);
     
-    const paidTotal = totals.find(t => t._id === 'paid')?.total || 0;
+    const paidTotal = totals.find(t => t._id === 'paid')?.netTotal || 0;
     const unpaidTotal = totals.find(t => t._id === 'unpaid')?.total || 0;
+    const partialTotal = totals.find(t => t._id === 'partial')?.total || 0;
     
     res.status(200).json({
       success: true,
@@ -666,9 +734,9 @@ exports.getAllPayments = async (req, res, next) => {
         summary: {
           totalPaid: paidTotal,
           totalUnpaid: unpaidTotal,
-          totalPayments: paidTotal + unpaidTotal,
-          count: total,
-          totalAmount: payments.reduce((sum, p) => sum + (p.amount || 0), 0)
+          totalPartial: partialTotal,
+          totalPayments: paidTotal + unpaidTotal + partialTotal,
+          count: total
         },
         pagination: {
           page: parseInt(page),
@@ -694,7 +762,8 @@ exports.getPayment = async (req, res, next) => {
       organizationId: req.user.organizationId
     })
       .populate('user', 'name email phone')
-      .populate('paymentTypeId', 'name description amount');
+      .populate('paymentTypeId', 'name description amount')
+      .populate('parentPaymentId');
 
     if (!payment) {
       return res.status(404).json({
@@ -741,7 +810,12 @@ exports.updatePayment = async (req, res, next) => {
 
     if (status) payment.status = status;
     if (paidAt) payment.paidAt = paidAt;
-    if (amount) payment.amount = amount;
+    if (amount) {
+      payment.amount = amount;
+      payment.targetOrgAmount = amount;
+      payment.expectedAmount = amount;
+      payment.remainingAmount = amount - (payment.totalPaidSoFar || 0);
+    }
     if (dueDate) payment.dueDate = dueDate;
     if (description) payment.description = description;
 
@@ -778,6 +852,19 @@ exports.deletePayment = async (req, res, next) => {
       return res.status(400).json({
         success: false,
         message: 'Cannot delete a paid payment'
+      });
+    }
+
+    // Also delete any outstanding payment records
+    if (payment.parentPaymentId) {
+      await Payment.deleteMany({ parentPaymentId: payment._id });
+    }
+    
+    if (payment.isPartial && payment.partialPayments?.length) {
+      // Don't delete if there are partial payments
+      return res.status(400).json({
+        success: false,
+        message: 'Cannot delete a payment that has partial payments'
       });
     }
 
@@ -860,10 +947,11 @@ exports.getPaymentStats = async (req, res, next) => {
             _id: null,
             totalPayments: { $sum: 1 },
             totalAmount: { $sum: '$amount' },
+            totalNetToOrg: { $sum: '$netToOrganization' },
             paidCount: { $sum: { $cond: [{ $eq: ['$status', 'paid'] }, 1, 0] } },
-            unpaidCount: { $sum: { $cond: [{ $eq: ['$status', 'unpaid'] }, 1, 0] } },
-            paidAmount: { $sum: { $cond: [{ $eq: ['$status', 'paid'] }, '$amount', 0] } },
-            unpaidAmount: { $sum: { $cond: [{ $eq: ['$status', 'unpaid'] }, '$amount', 0] } }
+            unpaidCount: { $sum: { $cond: [{ $in: ['$status', ['unpaid', 'partial']] }, 1, 0] } },
+            paidAmount: { $sum: { $cond: [{ $eq: ['$status', 'paid'] }, '$netToOrganization', 0] } },
+            unpaidAmount: { $sum: { $cond: [{ $in: ['$status', ['unpaid', 'partial']] }, '$remainingAmount', 0] } }
           }
         }
       ]),
@@ -889,6 +977,7 @@ exports.getPaymentStats = async (req, res, next) => {
         summary: stats[0] || {
           totalPayments: 0,
           totalAmount: 0,
+          totalNetToOrg: 0,
           paidCount: 0,
           unpaidCount: 0,
           paidAmount: 0,
@@ -919,12 +1008,13 @@ exports.createMemberPayment = async (req, res, next) => {
       });
     }
 
+    // Check for existing outstanding balance
     const existingOutstanding = await Payment.findOne({
       user: userId,
       paymentTypeId: paymentTypeId,
       organizationId: organizationId,
-      status: 'unpaid',
-      name: { $regex: 'Outstanding Balance', $options: 'i' }
+      status: { $in: ['unpaid', 'partial'] },
+      remainingAmount: { $gt: 0 }
     });
 
     if (existingOutstanding) {
@@ -940,9 +1030,11 @@ exports.createMemberPayment = async (req, res, next) => {
       name: name,
       type: type,
       amount: amount,
+      targetOrgAmount: amount,
       expectedAmount: amount,
       paidAmount: 0,
       remainingAmount: amount,
+      totalPaidSoFar: 0,
       isPartial: false,
       description: description || `${name} payment`,
       paymentTypeId: paymentTypeId || null,
@@ -1002,6 +1094,10 @@ exports.processBulkPayments = async (req, res, next) => {
           name: `${payment.type} payment`,
           type: payment.type,
           amount: payment.amount,
+          targetOrgAmount: payment.amount,
+          expectedAmount: payment.amount,
+          remainingAmount: payment.amount,
+          totalPaidSoFar: 0,
           dueDate: payment.dueDate || null,
           description: payment.description || `${payment.type} payment`,
           organizationId: organizationId,
@@ -1028,6 +1124,65 @@ exports.processBulkPayments = async (req, res, next) => {
     });
   } catch (error) {
     console.error('Bulk payment error:', error);
+    next(error);
+  }
+};
+
+// @desc    Record manual partial payment (Admin - for bank transfers)
+// @route   POST /api/payments/record-partial
+// @access  Private/Admin
+exports.recordPartialPayment = async (req, res, next) => {
+  try {
+    const { paymentId, amountPaid, reference, notes } = req.body;
+    const organizationId = req.user.organizationId;
+    
+    const originalPayment = await Payment.findOne({
+      _id: paymentId,
+      organizationId: organizationId
+    }).populate('user', 'name email');
+    
+    if (!originalPayment) {
+      return res.status(404).json({
+        success: false,
+        message: 'Payment not found'
+      });
+    }
+    
+    if (originalPayment.status === 'paid') {
+      return res.status(400).json({
+        success: false,
+        message: 'Payment already completed'
+      });
+    }
+    
+    if (!amountPaid || amountPaid <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Valid amount is required'
+      });
+    }
+    
+    const result = await handlePartialPayment(
+      originalPayment, 
+      amountPaid, 
+      reference || `MANUAL-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      notes
+    );
+    
+    res.status(200).json({
+      success: true,
+      data: {
+        payment: originalPayment,
+        remainingAmount: result.remainingAmount,
+        outstandingPayment: result.outstandingPayment,
+        netToOrg: result.netToOrg
+      },
+      message: result.remainingAmount > 0 
+        ? `Partial payment of ₦${amountPaid.toLocaleString()} recorded. Outstanding balance: ₦${result.remainingAmount.toLocaleString()}`
+        : 'Payment completed successfully'
+    });
+  } catch (error) {
+    console.error('Record partial payment error:', error);
     next(error);
   }
 };
