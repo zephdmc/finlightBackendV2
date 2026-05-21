@@ -56,6 +56,9 @@ const validateAmount = (amount) => {
   return !isNaN(numAmount) && numAmount > 0 && numAmount <= 10000000;
 };
 
+// Store for tracking verification in progress (in-memory, for distributed systems use Redis)
+const verificationInProgress = new Map();
+
 // ==================== FEE CALCULATION HELPERS ====================
 
 /**
@@ -164,6 +167,7 @@ const processPartialPayment = async (originalPayment, amountPaid, reference, isM
     paymentType: originalPayment.type,
     transactionReference: reference,
     organizationId: originalPayment.user?.organizationId,
+    createdBy: originalPayment.user?._id,
     metadata: { 
       isPartial: true,
       partialAmount: amountPaid,
@@ -200,7 +204,8 @@ const processPartialPayment = async (originalPayment, amountPaid, reference, isM
         parentPaymentId: originalPayment._id,
         status: 'unpaid',
         isPartial: true,
-        dueDate: originalPayment.dueDate || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
+        dueDate: originalPayment.dueDate || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+        createdBy: originalPayment.user?._id
       });
     }
     console.log(`📝 Created outstanding record: ₦${remainingOrgTarget.toLocaleString()} for ${originalPayment.name}`);
@@ -353,9 +358,34 @@ router.post('/initialize', protect, paymentInitLimiter, validatePaymentInit, asy
 // ==================== PAYMENT VERIFICATION ====================
 
 router.get('/verify/:reference', verifyLimiter, validatePaymentVerification, async (req, res) => {
+  const { reference } = req.params;
+  
+  // Check if this reference is already being processed
+  if (verificationInProgress.has(reference)) {
+    console.log('⏳ Verification already in progress for:', reference);
+    await verificationInProgress.get(reference);
+    const payment = await Payment.findOne({ transactionReference: reference });
+    if (payment && payment.status === 'paid') {
+      return res.status(200).json({
+        success: true,
+        data: { 
+          status: payment.status, 
+          amount: payment.amount,
+          remainingAmount: payment.remainingAmount
+        },
+        message: 'Payment already verified'
+      });
+    }
+  }
+  
+  // Create a promise to track this verification
+  let resolveVerification;
+  const verificationPromise = new Promise((resolve) => {
+    resolveVerification = resolve;
+  });
+  verificationInProgress.set(reference, verificationPromise);
+  
   try {
-    const { reference } = req.params;
-    
     console.log('🔍 Verifying payment:', reference);
     
     let payment = await Payment.findOne({ transactionReference: reference })
@@ -369,13 +399,24 @@ router.get('/verify/:reference', verifyLimiter, validatePaymentVerification, asy
     }
     
     if (!payment) {
+      verificationInProgress.delete(reference);
+      resolveVerification();
       return res.status(404).json({ success: false, message: 'Payment not found' });
     }
     
+    // Check if already paid
     if (payment.status === 'paid') {
+      console.log('✅ Payment already verified and marked as paid');
+      verificationInProgress.delete(reference);
+      resolveVerification();
       return res.status(200).json({
         success: true,
-        data: { status: payment.status, amount: payment.amount },
+        data: { 
+          status: payment.status, 
+          amount: payment.amount,
+          remainingAmount: payment.remainingAmount,
+          isPartial: payment.isPartial
+        },
         message: 'Payment already verified'
       });
     }
@@ -391,27 +432,41 @@ router.get('/verify/:reference', verifyLimiter, validatePaymentVerification, asy
       const amountPaid = data.data.amount / 100;
       const expectedAmount = payment.expectedAmount || payment.amount;
       
-      // Check if this is a partial payment (member paid less than expected)
-      // Note: For bank transfers, this will be called with the actual amount paid
-      const isPartialPayment = amountPaid < expectedAmount;
+      // Check if this is a partial payment (paid less than expected by more than 1 Naira)
+      const isPartialPayment = amountPaid < (expectedAmount - 1);
       
-      let partialResult = null;
+      console.log(`💰 Amount paid: ₦${amountPaid}, Expected: ₦${expectedAmount}, Is Partial: ${isPartialPayment}`);
+      console.log(`Current payment status before update: ${payment.status}, remaining: ${payment.remainingAmount}`);
+      
+      let result;
       
       if (isPartialPayment) {
-        // Process partial payment - organization target remains, fees apply to amount paid
-        partialResult = await processPartialPayment(payment, amountPaid, reference, false);
-        console.log(`⚠️ Partial payment! Paid: ₦${amountPaid}, Expected: ₦${expectedAmount}, Remaining target: ₦${partialResult.remainingTarget}`);
+        // Process partial payment
+        result = await processPartialPayment(payment, amountPaid, reference, false);
+        console.log(`⚠️ Partial payment! Paid: ₦${amountPaid}, Expected: ₦${expectedAmount}, Remaining target: ₦${result.remainingTarget}`);
       } else {
-        // Full payment - standard processing
+        // Full payment - Use findOneAndUpdate to force the update
         const fees = calculateNetToOrganization(amountPaid);
         
-        payment.status = 'paid';
-        payment.paidAt = new Date();
-        payment.actualAmountPaid = amountPaid;
-        payment.netToOrganization = fees.netToOrg;
-        payment.totalPaidSoFar = amountPaid;
-        payment.remainingAmount = 0;
-        await payment.save();
+        // Force update using findOneAndUpdate to bypass any middleware issues
+        const updatedPayment = await Payment.findOneAndUpdate(
+          { _id: payment._id },
+          {
+            $set: {
+              status: 'paid',
+              paidAt: new Date(),
+              actualAmountPaid: amountPaid,
+              netToOrganization: fees.netToOrg,
+              totalPaidSoFar: amountPaid,
+              remainingAmount: 0,
+              isPartial: false,
+              completedAt: new Date()
+            }
+          },
+          { new: true } // Return the updated document
+        );
+        
+        console.log(`✅ Full payment recorded: Status=${updatedPayment.status}, Remaining=${updatedPayment.remainingAmount}`);
         
         // Record INCOME
         await Income.create({
@@ -423,19 +478,26 @@ router.get('/verify/:reference', verifyLimiter, validatePaymentVerification, asy
           paymentType: payment.type,
           transactionReference: reference,
           organizationId: payment.user?.organizationId,
+          createdBy: payment.user?._id,
           metadata: { 
             grossAmount: amountPaid,
             netToOrg: fees.netToOrg,
             fees: { paystackFee: fees.paystackFee, platformFee: fees.platformFee }
           }
         });
+        
+        payment = updatedPayment;
+        result = { remainingTarget: 0 };
       }
       
       if (payment.type === 'registration') {
         await User.findByIdAndUpdate(payment.user, { hasPaidRegistration: true });
       }
       
-      console.log(`✅ Payment verified: Member paid ₦${amountPaid.toFixed(2)}`);
+      console.log(`✅ Payment verified: Member paid ₦${amountPaid.toFixed(2)}, Final Status: ${payment.status}`);
+      
+      verificationInProgress.delete(reference);
+      resolveVerification();
       
       res.status(200).json({
         success: true,
@@ -443,16 +505,20 @@ router.get('/verify/:reference', verifyLimiter, validatePaymentVerification, asy
           status: payment.status, 
           amount: payment.amount,
           isPartial: isPartialPayment || false,
-          remainingAmount: partialResult?.remainingTarget || 0,
+          remainingAmount: result?.remainingTarget || payment.remainingAmount || 0,
           totalPaidSoFar: payment.totalPaidSoFar || amountPaid
         },
-        message: isPartialPayment ? `Partial payment of ₦${amountPaid.toLocaleString()} verified. Outstanding balance: ₦${partialResult?.remainingTarget.toLocaleString()}` : 'Payment verified successfully'
+        message: isPartialPayment ? `Partial payment of ₦${amountPaid.toLocaleString()} verified. Outstanding balance: ₦${result?.remainingTarget.toLocaleString()}` : 'Payment verified successfully'
       });
     } else {
+      verificationInProgress.delete(reference);
+      resolveVerification();
       res.status(400).json({ success: false, message: data.message || 'Payment verification failed' });
     }
   } catch (error) {
     console.error('Verification error:', error);
+    verificationInProgress.delete(reference);
+    resolveVerification();
     res.status(500).json({ success: false, message: error.message });
   }
 });
@@ -482,13 +548,16 @@ router.post('/webhook', webhookLimiter, async (req, res) => {
     
     if (event.event === 'charge.success') {
       const { reference, amount } = event.data;
-      const payment = await Payment.findOne({ transactionReference: reference })
-        .populate('user', 'organizationId');
+      
+      const payment = await Payment.findOne({ 
+        transactionReference: reference,
+        status: { $ne: 'paid' }
+      }).populate('user', 'organizationId');
       
       if (payment && payment.status !== 'paid') {
         const amountPaid = amount / 100;
         const expectedAmount = payment.expectedAmount || payment.amount;
-        const isPartialPayment = amountPaid < expectedAmount;
+        const isPartialPayment = amountPaid < (expectedAmount - 1);
         
         if (isPartialPayment) {
           await processPartialPayment(payment, amountPaid, reference, false);
@@ -496,13 +565,22 @@ router.post('/webhook', webhookLimiter, async (req, res) => {
         } else {
           const fees = calculateNetToOrganization(amountPaid);
           
-          payment.status = 'paid';
-          payment.paidAt = new Date();
-          payment.actualAmountPaid = amountPaid;
-          payment.netToOrganization = fees.netToOrg;
-          payment.totalPaidSoFar = amountPaid;
-          payment.remainingAmount = 0;
-          await payment.save();
+          // Force update using findOneAndUpdate
+          await Payment.findOneAndUpdate(
+            { _id: payment._id },
+            {
+              $set: {
+                status: 'paid',
+                paidAt: new Date(),
+                actualAmountPaid: amountPaid,
+                netToOrganization: fees.netToOrg,
+                totalPaidSoFar: amountPaid,
+                remainingAmount: 0,
+                isPartial: false,
+                completedAt: new Date()
+              }
+            }
+          );
           
           await Income.create({
             amount: fees.netToOrg,
@@ -512,7 +590,8 @@ router.post('/webhook', webhookLimiter, async (req, res) => {
             paymentId: payment._id,
             paymentType: payment.type,
             transactionReference: reference,
-            organizationId: payment.user?.organizationId
+            organizationId: payment.user?.organizationId,
+            createdBy: payment.user?._id
           });
         }
         

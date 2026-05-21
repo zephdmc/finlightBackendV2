@@ -107,7 +107,7 @@ const PaymentTypeSchema = new mongoose.Schema({
 
 // ============= INDEXES FOR MULTI-TENANCY =============
 // Unique compound index: same payment type name cannot exist twice within one organization
-PaymentTypeSchema.index({ organizationId: 1, name: 1 }, { unique: true });
+PaymentTypeSchema.index({ organizationId: 1, name: 1 });
 
 // Primary tenant filter index (most queries)
 PaymentTypeSchema.index({ organizationId: 1, createdAt: -1 });
