@@ -24,7 +24,13 @@ const paymentInitLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 10,
   message: { success: false, message: 'Too many payment initialization attempts.' },
-  keyGenerator: (req) => req.user?.id || req.ip
+  keyGenerator: (req) => {
+    // Use a more reliable key generator
+    return req.user?.id || req.ip || req.connection.remoteAddress;
+  },
+    // Add this to fix IPv6 warning
+    standardHeaders: true,
+    legacyHeaders: false,
 });
 
 const webhookLimiter = rateLimit({
