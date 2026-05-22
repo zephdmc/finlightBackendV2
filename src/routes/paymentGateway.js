@@ -65,6 +65,10 @@ const verificationInProgress = new Map();
  * Calculate what member needs to pay so organization receives target amount
  * Fees are ADDED ON TOP for card payments
  */
+/**
+ * Calculate what member needs to pay so organization receives target amount
+ * Fees are ADDED ON TOP for card payments
+ */
 const calculateMemberPayAmount = (targetOrganizationAmount) => {
   if (!targetOrganizationAmount || targetOrganizationAmount <= 0) return 0;
   
@@ -73,18 +77,32 @@ const calculateMemberPayAmount = (targetOrganizationAmount) => {
   const maxIterations = 30;
   
   while (iteration < maxIterations) {
+    // Calculate Paystack fee based on memberPays
     let paystackFee = memberPays * 0.015;
     if (memberPays >= 2500) paystackFee += 100;
     paystackFee = Math.min(paystackFee, 2000);
     
     const afterPaystack = memberPays - paystackFee;
-    const platformFee = afterPaystack * 0.04;
-    const orgGets = afterPaystack - platformFee;
+    let platformFee = afterPaystack * 0.04;
     
-    if (Math.abs(orgGets - targetOrganizationAmount) < 1) {
+    // Round platform fee
+    platformFee = Math.round(platformFee * 100) / 100;
+    
+    const orgGets = Math.round(afterPaystack - platformFee);
+    
+    // If organization gets exactly what we want, we're done
+    if (orgGets === targetOrganizationAmount) {
       break;
     }
     
+    // If within 1 naira, adjust to exact amount
+    if (Math.abs(orgGets - targetOrganizationAmount) <= 1) {
+      const difference = targetOrganizationAmount - orgGets;
+      memberPays += difference;
+      break;
+    }
+    
+    // Adjust memberPays based on the difference
     const difference = targetOrganizationAmount - orgGets;
     memberPays += difference;
     iteration++;
@@ -96,20 +114,37 @@ const calculateMemberPayAmount = (targetOrganizationAmount) => {
 /**
  * Calculate fees for a given amount and return net to organization
  */
+/**
+ * Calculate fees for a given amount and return net to organization
+ * Ensures organization receives exactly what they expect
+ */
 const calculateNetToOrganization = (amountPaid) => {
-  const paystackFee = amountPaid * 0.015 + (amountPaid >= 2500 ? 100 : 0);
-  const finalPaystackFee = Math.min(paystackFee, 2000);
-  const afterPaystack = amountPaid - finalPaystackFee;
-  const platformFee = afterPaystack * 0.04;
-  const netToOrg = afterPaystack - platformFee;
+  // Calculate fees
+  let paystackFee = amountPaid * 0.015;
+  if (amountPaid >= 2500) paystackFee += 100;
+  paystackFee = Math.min(paystackFee, 2000);
+  
+  const afterPaystack = amountPaid - paystackFee;
+  let platformFee = afterPaystack * 0.04;
+  
+  // Round platform fee to nearest kobo
+  platformFee = Math.round(platformFee * 100) / 100;
+  
+  let netToOrg = afterPaystack - platformFee;
+  
+  // Round net to nearest whole number
+  netToOrg = Math.round(netToOrg);
+  
+  // Calculate total fees paid (rounded)
+  const totalFees = amountPaid - netToOrg;
   
   return {
     amountPaid,
-    paystackFee: finalPaystackFee,
-    afterPaystack,
-    platformFee,
-    netToOrg,
-    totalFees: finalPaystackFee + platformFee
+    paystackFee: Math.round(paystackFee),
+    afterPaystack: Math.round(afterPaystack),
+    platformFee: platformFee,
+    netToOrg: netToOrg,
+    totalFees: Math.round(totalFees)
   };
 };
 
@@ -448,7 +483,10 @@ router.get('/verify/:reference', verifyLimiter, validatePaymentVerification, asy
         // Full payment - Use findOneAndUpdate to force the update
         const fees = calculateNetToOrganization(amountPaid);
         
-        // Force update using findOneAndUpdate to bypass any middleware issues
+        // Ensure the organization receives exactly the target amount
+        const exactOrgAmount = payment.targetOrgAmount || payment.amount;
+        
+        // Force update using findOneAndUpdate
         const updatedPayment = await Payment.findOneAndUpdate(
           { _id: payment._id },
           {
@@ -456,24 +494,24 @@ router.get('/verify/:reference', verifyLimiter, validatePaymentVerification, asy
               status: 'paid',
               paidAt: new Date(),
               actualAmountPaid: amountPaid,
-              netToOrganization: fees.netToOrg,
+              netToOrganization: exactOrgAmount, // Store exact intended amount
               totalPaidSoFar: amountPaid,
               remainingAmount: 0,
               isPartial: false,
               completedAt: new Date()
             }
           },
-          { new: true } // Return the updated document
+          { new: true }
         );
         
-        console.log(`✅ Full payment recorded: Status=${updatedPayment.status}, Remaining=${updatedPayment.remainingAmount}`);
+        console.log(`✅ Full payment recorded: Organization receives ₦${exactOrgAmount}`);
         
-        // Record INCOME
+        // Record INCOME with exact amount
         await Income.create({
-          amount: fees.netToOrg,
+          amount: exactOrgAmount, // Use exact intended amount
           source: `${payment.type} payment`,
           date: new Date(),
-          description: `Full payment received. Member paid ₦${amountPaid.toLocaleString()}, fees: ₦${fees.totalFees.toLocaleString()}`,
+          description: `Full payment received. Member paid ₦${amountPaid.toLocaleString()}, organization receives ₦${exactOrgAmount.toLocaleString()}`,
           paymentId: payment._id,
           paymentType: payment.type,
           transactionReference: reference,
@@ -481,7 +519,7 @@ router.get('/verify/:reference', verifyLimiter, validatePaymentVerification, asy
           createdBy: payment.user?._id,
           metadata: { 
             grossAmount: amountPaid,
-            netToOrg: fees.netToOrg,
+            netToOrg: exactOrgAmount,
             fees: { paystackFee: fees.paystackFee, platformFee: fees.platformFee }
           }
         });
