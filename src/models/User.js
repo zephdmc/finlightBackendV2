@@ -35,6 +35,14 @@ const userSchema = new mongoose.Schema({
       return this.role !== 'super-admin' && this.role !== 'super_admin';
     }
   },
+  resetPasswordToken: {
+    type: String,
+    index: true,
+    sparse: true
+  },
+  resetPasswordExpires: {
+    type: Date
+  },
   hasPaidRegistration: {
     type: Boolean,
     default: true

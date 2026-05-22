@@ -92,6 +92,19 @@ router.post('/signup', signupLimiter, validateSignup, authController.signupWithO
 router.post('/forgot-password', authLimiter, validateForgotPassword, authController.forgotPassword);
 router.post('/reset-password/:token', authLimiter, validateResetPassword, authController.resetPassword);
 
+// // POST /api/auth/forgot-password
+// router.post('/forgot-password', 
+//   rateLimit({ windowMs: 15 * 60 * 1000, max: 3 }), // 3 attempts per 15 minutes
+//   body('email').isEmail().normalizeEmail(),
+//   authController.forgotPassword
+// );
+
+// // POST /api/auth/reset-password/:token
+// router.post('/reset-password/:token',
+//   body('newPassword').isLength({ min: 6 }).withMessage('Password must be at least 6 characters'),
+//   authController.resetPassword
+// );
+
 // ==================== PROTECTED ROUTES ====================
 
 router.get('/me', protect, authController.getMe);

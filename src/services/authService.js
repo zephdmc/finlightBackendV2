@@ -2,6 +2,7 @@ const User = require('../models/User');
 const Payment = require('../models/Payment');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
+const { sendPasswordResetEmail } = require('./emailService');
 
 /**
  * Authentication Service
@@ -10,13 +11,17 @@ const crypto = require('crypto');
  */
 class AuthService {
   /**
-   * Generate JWT token
-   * @param {string} userId - User ID
+   * Generate JWT token (with organization support)
+   * @param {Object} user - User object
    * @returns {string} - JWT token
    */
-  generateToken(userId) {
+  generateToken(user) {
     return jwt.sign(
-      { id: userId },
+      { 
+        id: user._id,
+        organizationId: user.organizationId,
+        role: user.role
+      },
       process.env.JWT_SECRET,
       { expiresIn: process.env.JWT_EXPIRE || '7d' }
     );
@@ -36,17 +41,17 @@ class AuthService {
   }
 
   /**
-   * Register new user
+   * Register new user (with organization support)
    * @param {Object} userData - User registration data
    * @returns {Promise<Object>} - Created user and token
    */
   async register(userData) {
-    const { name, email, password, role = 'member' } = userData;
+    const { name, email, password, role = 'member', organizationId } = userData;
 
-    // Check if user exists
-    const existingUser = await User.findOne({ email });
+    // Check if user exists in this organization
+    const existingUser = await User.findOne({ email, organizationId });
     if (existingUser) {
-      const error = new Error('User already exists with this email');
+      const error = new Error('User already exists with this email in your organization');
       error.statusCode = 400;
       throw error;
     }
@@ -56,7 +61,8 @@ class AuthService {
       name,
       email,
       password,
-      role
+      role,
+      organizationId
     });
 
     // If member, create registration payment record
@@ -65,12 +71,13 @@ class AuthService {
         user: user._id,
         type: 'registration',
         amount: 500, // Registration fee
-        status: 'unpaid'
+        status: 'unpaid',
+        organizationId
       });
     }
 
     // Generate token
-    const token = this.generateToken(user._id);
+    const token = this.generateToken(user);
 
     return {
       user: {
@@ -78,6 +85,7 @@ class AuthService {
         name: user.name,
         email: user.email,
         role: user.role,
+        organizationId: user.organizationId,
         hasPaidRegistration: user.hasPaidRegistration
       },
       token
@@ -85,7 +93,7 @@ class AuthService {
   }
 
   /**
-   * Login user
+   * Login user (with organization support)
    * @param {string} email - User email
    * @param {string} password - User password
    * @returns {Promise<Object>} - User data and token
@@ -109,7 +117,7 @@ class AuthService {
     }
 
     // Generate token
-    const token = this.generateToken(user._id);
+    const token = this.generateToken(user);
 
     return {
       user: {
@@ -117,6 +125,7 @@ class AuthService {
         name: user.name,
         email: user.email,
         role: user.role,
+        organizationId: user.organizationId,
         hasPaidRegistration: user.hasPaidRegistration
       },
       token
@@ -147,6 +156,14 @@ class AuthService {
       throw error;
     }
 
+    // Validate new password strength
+    const passwordStrength = this.validatePasswordStrength(newPassword);
+    if (!passwordStrength.isValid) {
+      const error = new Error(passwordStrength.errors.join(', '));
+      error.statusCode = 400;
+      throw error;
+    }
+
     // Update password
     user.password = newPassword;
     await user.save();
@@ -155,17 +172,17 @@ class AuthService {
   }
 
   /**
-   * Request password reset
+   * Request password reset (with email sending)
    * @param {string} email - User email
-   * @returns {Promise<Object>} - Reset token
+   * @returns {Promise<Object>} - Reset token (only in development)
    */
   async requestPasswordReset(email) {
+    // Always return success for security (don't reveal if email exists)
     const user = await User.findOne({ email });
     
     if (!user) {
-      const error = new Error('User not found');
-      error.statusCode = 404;
-      throw error;
+      console.log(`Password reset requested for non-existent email: ${email}`);
+      return { success: true };
     }
 
     // Generate reset token
@@ -176,10 +193,23 @@ class AuthService {
     user.resetPasswordExpiry = resetTokenExpiry;
     await user.save();
 
+    // Generate reset URL
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+    const resetUrl = `${frontendUrl}/reset-password?token=${resetToken}`;
+    
+    // Send email
+    const emailSent = await sendPasswordResetEmail(user.email, user.name, resetUrl);
+    
+    if (!emailSent) {
+      console.error(`Failed to send password reset email to ${email}`);
+    }
+
+    console.log(`Password reset requested for: ${email}, Token: ${resetToken}`);
+    
     return {
-      resetToken,
-      email: user.email,
-      name: user.name
+      success: true,
+      // Only return token in development for testing
+      ...(process.env.NODE_ENV === 'development' && { resetToken })
     };
   }
 
@@ -190,6 +220,13 @@ class AuthService {
    * @returns {Promise<boolean>} - Success status
    */
   async resetPassword(token, newPassword) {
+    // Validate password
+    if (!newPassword || newPassword.length < 6) {
+      const error = new Error('Password must be at least 6 characters long');
+      error.statusCode = 400;
+      throw error;
+    }
+
     const user = await User.findOne({
       resetPasswordToken: token,
       resetPasswordExpiry: { $gt: Date.now() }
@@ -201,11 +238,21 @@ class AuthService {
       throw error;
     }
 
+    // Validate password strength
+    const passwordStrength = this.validatePasswordStrength(newPassword);
+    if (!passwordStrength.isValid) {
+      const error = new Error(passwordStrength.errors.join(', '));
+      error.statusCode = 400;
+      throw error;
+    }
+
     // Update password
     user.password = newPassword;
     user.resetPasswordToken = undefined;
     user.resetPasswordExpiry = undefined;
     await user.save();
+
+    console.log(`Password reset successful for user: ${user.email}`);
 
     return true;
   }
@@ -220,6 +267,9 @@ class AuthService {
   validateAccess(userId, resourceUserId, userRole) {
     // Admin has full access
     if (userRole === 'admin') return true;
+    
+    // Super admin has full access
+    if (userRole === 'super_admin') return true;
     
     // Users can only access their own resources
     return userId === resourceUserId;
@@ -255,7 +305,7 @@ class AuthService {
         throw error;
       }
 
-      const newToken = this.generateToken(user._id);
+      const newToken = this.generateToken(user);
       
       return {
         token: newToken,
@@ -263,7 +313,8 @@ class AuthService {
           id: user._id,
           name: user.name,
           email: user.email,
-          role: user.role
+          role: user.role,
+          organizationId: user.organizationId
         }
       };
     } catch (error) {
@@ -282,7 +333,7 @@ class AuthService {
   async logout(token) {
     // In a production app, you might want to implement token blacklisting
     // using Redis or a database table
-    console.log('Logout requested for token:', token.substring(0, 20) + '...');
+    console.log('Logout requested for token:', token?.substring(0, 20) + '...');
     return true;
   }
 

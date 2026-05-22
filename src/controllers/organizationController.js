@@ -1,5 +1,6 @@
 // backend/src/controllers/organizationController.js
 const Organization = require('../models/Organization');
+const { sendOrganizationWelcomeEmail } = require('../services/emailService'); // ADD THIS LINE
 const User = require('../models/User');
 const mongoose = require('mongoose');
 
@@ -132,6 +133,10 @@ class OrganizationController {
         });
         
         await adminUser.save();
+         
+        // ✅ SEND WELCOME EMAIL TO ADMIN
+        const loginUrl = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/login`;
+        await sendOrganizationWelcomeEmail(adminEmail, adminName, name, loginUrl);
       }
 
       res.status(201).json({
