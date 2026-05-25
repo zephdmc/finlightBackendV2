@@ -52,7 +52,7 @@ app.use(cors({
 // 3. Rate Limiting - Prevent brute force attacks
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 400, // Limit each IP to 100 requests per windowMs
+  max: 400, // Limit each IP to 400 requests per windowMs
   message: {
     success: false,
     message: 'Too many requests from this IP, please try again after 15 minutes'
@@ -64,7 +64,7 @@ const limiter = rateLimit({
 // Stricter rate limit for auth endpoints
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 10, // Limit each IP to 5 requests per windowMs
+  max: 10, // Limit each IP to 10 requests per windowMs
   message: {
     success: false,
     message: 'Too many login attempts, please try again after 15 minutes'
@@ -99,26 +99,48 @@ app.use(hpp({
   whitelist: ['page', 'limit', 'sort', 'startDate', 'endDate', 'search', 'type', 'status']
 }));
 
-// 9. Session configuration (optional but recommended for additional security)
-if (process.env.NODE_ENV === 'production') {
-  app.use(session({
-    secret: process.env.SESSION_SECRET || 'your-session-secret-key-change-in-production',
-    resave: false,
-    saveUninitialized: false,
-    store: MongoStore.create({
-      mongoUrl: process.env.MONGODB_URI,
+// 9. Session configuration - FIXED VERSION (works in both development and production)
+// Check if MongoDB URI is available for session store
+const mongoUri = process.env.MONGODB_URI;
+const useSessionStore = mongoUri && (process.env.NODE_ENV === 'production');
+
+// Create session store only if MongoDB is available
+let sessionStore = null;
+if (useSessionStore) {
+  try {
+    sessionStore = MongoStore.create({
+      mongoUrl: mongoUri,
       ttl: 24 * 60 * 60, // 1 day
       autoRemove: 'native',
-    }),
-    cookie: {
-      secure: true, // Only send over HTTPS
-      httpOnly: true,
-      maxAge: 24 * 60 * 60 * 1000,
-      sameSite: 'strict',
-    },
-    name: 'sessionId',
-  }));
+      touchAfter: 24 * 3600 // lazy session update
+    });
+    console.log('✅ Session store initialized with MongoDB');
+  } catch (error) {
+    console.error('❌ Failed to initialize session store:', error.message);
+    console.log('⚠️ Continuing without session store');
+  }
 }
+
+// Session middleware configuration
+const sessionConfig = {
+  secret: process.env.SESSION_SECRET || 'your-session-secret-key-change-in-production',
+  resave: false,
+  saveUninitialized: false,
+  cookie: {
+    secure: process.env.NODE_ENV === 'production', // Only send over HTTPS in production
+    httpOnly: true,
+    maxAge: 24 * 60 * 60 * 1000, // 1 day
+    sameSite: 'lax',
+  },
+  name: 'sessionId',
+};
+
+// Add store only if successfully created
+if (sessionStore) {
+  sessionConfig.store = sessionStore;
+}
+
+app.use(session(sessionConfig));
 
 // 10. Custom security headers
 app.use((req, res, next) => {
@@ -189,7 +211,7 @@ app.get('/api', (req, res) => {
       paymentTypes: '/api/payment-types',
       transactions: '/api/transactions',
       reports: '/api/reports',
-      paymentGateway: '/api/payment-gateway'  // ✅ Add this
+      paymentGateway: '/api/payment-gateway'
     };
   }
   
