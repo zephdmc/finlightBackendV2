@@ -12,7 +12,7 @@ const { body, param, query } = require('express-validator');
 // Transaction-specific rate limiting
 const transactionLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 50, // 50 requests per 15 minutes
+  max: 100, // 50 requests per 15 minutes
   message: {
     success: false,
     message: 'Too many transaction requests. Please try again later.'
@@ -24,7 +24,7 @@ const transactionLimiter = rateLimit({
 // Stricter limiter for write operations
 const writeTransactionLimiter = rateLimit({
   windowMs: 60 * 60 * 1000, // 1 hour
-  max: 20, // 20 write operations per hour
+  max: 200, // 20 write operations per hour
   message: {
     success: false,
     message: 'Transaction creation rate limit exceeded. Please slow down.'

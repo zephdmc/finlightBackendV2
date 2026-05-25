@@ -12,7 +12,7 @@ const { body, param, query } = require('express-validator');
 // User route rate limiting
 const userRouteLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // 100 requests per 15 minutes
+  max: 200, // 100 requests per 15 minutes
   message: {
     success: false,
     message: 'Too many requests to user endpoints. Please try again later.'
