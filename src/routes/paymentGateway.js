@@ -476,14 +476,11 @@ router.get('/verify/:reference', verifyLimiter, validatePaymentVerification, asy
       let result;
       
       if (isPartialPayment) {
-        // Process partial payment
+        // Process partial payment - KEEPS Income creation (as requested)
         result = await processPartialPayment(payment, amountPaid, reference, false);
         console.log(`⚠️ Partial payment! Paid: ₦${amountPaid}, Expected: ₦${expectedAmount}, Remaining target: ₦${result.remainingTarget}`);
       } else {
-        // Full payment - Use findOneAndUpdate to force the update
-        const fees = calculateNetToOrganization(amountPaid);
-        
-        // Ensure the organization receives exactly the target amount
+        // ✅ FULL PAYMENT - NO INCOME CREATION (just update payment status)
         const exactOrgAmount = payment.targetOrgAmount || payment.amount;
         
         // Force update using findOneAndUpdate
@@ -494,7 +491,7 @@ router.get('/verify/:reference', verifyLimiter, validatePaymentVerification, asy
               status: 'paid',
               paidAt: new Date(),
               actualAmountPaid: amountPaid,
-              netToOrganization: exactOrgAmount, // Store exact intended amount
+              netToOrganization: exactOrgAmount,
               totalPaidSoFar: amountPaid,
               remainingAmount: 0,
               isPartial: false,
@@ -505,24 +502,9 @@ router.get('/verify/:reference', verifyLimiter, validatePaymentVerification, asy
         );
         
         console.log(`✅ Full payment recorded: Organization receives ₦${exactOrgAmount}`);
+        console.log(`📝 No Income record created - Payment record is the source of truth`);
         
-        // Record INCOME with exact amount
-        await Income.create({
-          amount: exactOrgAmount, // Use exact intended amount
-          source: `${payment.type} payment`,
-          date: new Date(),
-          description: `Full payment received. Member paid ₦${amountPaid.toLocaleString()}, organization receives ₦${exactOrgAmount.toLocaleString()}`,
-          paymentId: payment._id,
-          paymentType: payment.type,
-          transactionReference: reference,
-          organizationId: payment.user?.organizationId,
-          createdBy: payment.user?._id,
-          metadata: { 
-            grossAmount: amountPaid,
-            netToOrg: exactOrgAmount,
-            fees: { paystackFee: fees.paystackFee, platformFee: fees.platformFee }
-          }
-        });
+        // ❌ Income.create() REMOVED - not creating income for full payments
         
         payment = updatedPayment;
         result = { remainingTarget: 0 };
@@ -560,7 +542,6 @@ router.get('/verify/:reference', verifyLimiter, validatePaymentVerification, asy
     res.status(500).json({ success: false, message: error.message });
   }
 });
-
 // ==================== PAYMENT WEBHOOK ====================
 
 router.post('/webhook', webhookLimiter, async (req, res) => {
