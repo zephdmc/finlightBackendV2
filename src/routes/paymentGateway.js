@@ -579,9 +579,11 @@ router.post('/webhook', webhookLimiter, async (req, res) => {
         const isPartialPayment = amountPaid < (expectedAmount - 1);
         
         if (isPartialPayment) {
+          // Partial payment - KEEPS Income creation
           await processPartialPayment(payment, amountPaid, reference, false);
           console.log(`⚠️ Webhook - Partial payment! Paid: ₦${amountPaid}, Expected: ₦${expectedAmount}`);
         } else {
+          // ✅ FULL PAYMENT - NO INCOME CREATION in webhook either
           const fees = calculateNetToOrganization(amountPaid);
           
           // Force update using findOneAndUpdate
@@ -601,17 +603,8 @@ router.post('/webhook', webhookLimiter, async (req, res) => {
             }
           );
           
-          await Income.create({
-            amount: fees.netToOrg,
-            source: `${payment.type} payment`,
-            date: new Date(),
-            description: `Payment received via webhook. Member paid ₦${amountPaid.toLocaleString()}`,
-            paymentId: payment._id,
-            paymentType: payment.type,
-            transactionReference: reference,
-            organizationId: payment.user?.organizationId,
-            createdBy: payment.user?._id
-          });
+          // ❌ NO Income.create() for full payments in webhook
+          console.log(`✅ Webhook - Full payment recorded. No Income record created.`);
         }
         
         console.log(`✅ Webhook processed: Member paid ₦${amountPaid.toFixed(2)}`);
