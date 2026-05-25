@@ -172,54 +172,78 @@ class AuthService {
   }
 
   /**
-   * Request password reset (with email sending)
+   * Request password reset (with email sending and secure token hashing)
    * @param {string} email - User email
    * @returns {Promise<Object>} - Reset token (only in development)
    */
   async requestPasswordReset(email) {
+    console.log(`📧 Password reset requested for: ${email}`);
+    
     // Always return success for security (don't reveal if email exists)
     const user = await User.findOne({ email });
     
     if (!user) {
-      console.log(`Password reset requested for non-existent email: ${email}`);
+      console.log(`⚠️ Password reset requested for non-existent email: ${email}`);
       return { success: true };
     }
 
-    // Generate reset token
+    // Generate secure reset token
     const resetToken = crypto.randomBytes(32).toString('hex');
+    
+    // 🔐 SECURITY FIX: Hash the token before storing in database
+    const hashedToken = crypto
+      .createHash('sha256')
+      .update(resetToken)
+      .digest('hex');
+    
     const resetTokenExpiry = Date.now() + 3600000; // 1 hour
 
-    user.resetPasswordToken = resetToken;
-    user.resetPasswordExpiry = resetTokenExpiry;
+    // Store HASHED token (not plain text)
+    user.resetPasswordToken = hashedToken;
+    user.resetPasswordExpires = resetTokenExpiry;
     await user.save();
 
-    // Generate reset URL
+    // Generate reset URL with plain token (for user to click)
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
     const resetUrl = `${frontendUrl}/reset-password?token=${resetToken}`;
     
-    // Send email
-    const emailSent = await sendPasswordResetEmail(user.email, user.name, resetUrl);
+    console.log(`🔗 Reset URL: ${resetUrl}`);
+    
+    // Send email using Brevo
+    const emailSent = await sendPasswordResetEmail(
+      user.email, 
+      user.name, 
+      resetUrl
+    );
     
     if (!emailSent) {
-      console.error(`Failed to send password reset email to ${email}`);
+      console.error(`❌ Failed to send password reset email to ${email}`);
+      // Don't throw error - user will still get success message
+    } else {
+      console.log(`✅ Password reset email sent to ${email}`);
     }
 
-    console.log(`Password reset requested for: ${email}, Token: ${resetToken}`);
+    // Return token only in development for testing
+    if (process.env.NODE_ENV === 'development') {
+      return {
+        success: true,
+        resetToken, // Plain token for testing
+        resetUrl
+      };
+    }
     
-    return {
-      success: true,
-      // Only return token in development for testing
-      ...(process.env.NODE_ENV === 'development' && { resetToken })
-    };
+    return { success: true };
   }
 
   /**
-   * Reset password with token
-   * @param {string} token - Reset token
+   * Reset password with token (verifies hashed token)
+   * @param {string} token - Plain reset token from email
    * @param {string} newPassword - New password
    * @returns {Promise<boolean>} - Success status
    */
   async resetPassword(token, newPassword) {
+    console.log(`🔐 Attempting password reset with token: ${token?.substring(0, 10)}...`);
+    
     // Validate password
     if (!newPassword || newPassword.length < 6) {
       const error = new Error('Password must be at least 6 characters long');
@@ -227,16 +251,26 @@ class AuthService {
       throw error;
     }
 
+    // 🔐 Hash the incoming token to compare with stored hash
+    const hashedToken = crypto
+      .createHash('sha256')
+      .update(token)
+      .digest('hex');
+
+    // Find user with matching HASHED token
     const user = await User.findOne({
-      resetPasswordToken: token,
-      resetPasswordExpiry: { $gt: Date.now() }
+      resetPasswordToken: hashedToken,
+      resetPasswordExpires: { $gt: Date.now() }
     });
 
     if (!user) {
-      const error = new Error('Invalid or expired reset token');
+      console.log(`❌ Invalid or expired reset token used`);
+      const error = new Error('Invalid or expired reset token. Please request a new password reset.');
       error.statusCode = 400;
       throw error;
     }
+
+    console.log(`✅ Found user for password reset: ${user.email}`);
 
     // Validate password strength
     const passwordStrength = this.validatePasswordStrength(newPassword);
@@ -249,10 +283,10 @@ class AuthService {
     // Update password
     user.password = newPassword;
     user.resetPasswordToken = undefined;
-    user.resetPasswordExpiry = undefined;
+    user.resetPasswordExpires = undefined;
     await user.save();
 
-    console.log(`Password reset successful for user: ${user.email}`);
+    console.log(`✅ Password reset successful for user: ${user.email}`);
 
     return true;
   }
@@ -331,9 +365,7 @@ class AuthService {
    * @param {string} token - Token to invalidate
    */
   async logout(token) {
-    // In a production app, you might want to implement token blacklisting
-    // using Redis or a database table
-    console.log('Logout requested for token:', token?.substring(0, 20) + '...');
+    console.log('🚪 Logout requested for token:', token?.substring(0, 20) + '...');
     return true;
   }
 
