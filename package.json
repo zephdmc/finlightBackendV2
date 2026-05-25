@@ -8,6 +8,7 @@
         "dev": "nodemon server.js"
     },
     "dependencies": {
+        "@getbrevo/brevo": "^5.0.4",
         "@obipascal/paystack-sdk": "^1.2.7",
         "@tanstack/react-query": "^5.100.11",
         "@tanstack/react-query-devtools": "^5.100.11",
