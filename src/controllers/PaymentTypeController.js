@@ -5,6 +5,8 @@ const User = require('../models/User');
 const mongoose = require('mongoose');
 const { addToEmailQueue } = require('../services/emailQueue');
 const sendEmailViaBrevo = require('../services/emailServiceBrevo');
+const { notifyOrganization } = require('../services/notificationService');
+
 /**
  * Helper: Get organizationId from authenticated user
  * All queries will be scoped to this organization
@@ -419,6 +421,8 @@ exports.createPaymentType = async (req, res, next) => {
       minimumFractionDigits: 0
     }).format(paymentType.amount);
 
+
+
     // Create SMS preview
     const smsPreview = `🔔 NEW PAYMENT: ${organizationName}\n\n` +
       `Dear [Member Name],\n` +
@@ -538,6 +542,16 @@ exports.createPaymentType = async (req, res, next) => {
         console.error('❌ Payment type email error:', err.message);
       }
     })();
+
+    await notifyOrganization({
+      organizationId,
+      title: 'New Payment Created 🔔',
+      message: `${paymentType.name} - ₦${paymentType.amount} has been created.`,
+      type: 'payment',
+      metadata: {
+        paymentTypeId: paymentType._id
+      }
+    });
 
     // Send response with preview
     res.status(201).json({
@@ -677,6 +691,16 @@ exports.updatePaymentType = async (req, res, next) => {
       });
     }
 
+    await notifyOrganization({
+      organizationId,
+      title: 'New Payment Updated 🔔',
+      message: `${paymentType.name} - ₦${paymentType.amount} has been Updated.`,
+      type: 'payment',
+      metadata: {
+        paymentTypeId: paymentType._id
+      }
+    });
+
     res.status(200).json({
       success: true,
       data: paymentType,
@@ -745,6 +769,15 @@ exports.deletePaymentType = async (req, res, next) => {
         message: 'Payment type not found'
       });
     }
+    await notifyOrganization({
+      organizationId,
+      title: 'Payment Deleted 🔔',
+      message: `${paymentType.name} - ₦${paymentType.amount} has been Deleted.`,
+      type: 'payment',
+      metadata: {
+        paymentTypeId: paymentType._id
+      }
+    });
 
     res.status(200).json({
       success: true,

@@ -3,6 +3,7 @@ const Income = require('../models/Income');
 const Expenditure = require('../models/Expenditure');
 const Payment = require('../models/Payment');
 const mongoose = require('mongoose');
+const { notifyOrganization } = require('../services/notificationService');
 
 /**
  * Transaction Controller - Handles income and expenditure operations
@@ -32,21 +33,21 @@ class TransactionController {
     try {
       const organizationId = this.getOrgId(req);
       const { amount, source, description } = req.body;
-  
+
       if (!amount || amount <= 0) {
         return res.status(400).json({
           success: false,
           message: 'Amount must be greater than 0'
         });
       }
-  
+
       if (!source || source.trim() === '') {
         return res.status(400).json({
           success: false,
           message: 'Source of income is required'
         });
       }
-  
+
       // FIXED: Always require organizationId
       if (!organizationId) {
         return res.status(400).json({
@@ -54,7 +55,7 @@ class TransactionController {
           message: 'Organization ID is required. Please ensure you are logged into an organization.'
         });
       }
-  
+
       const income = await Income.create({
         amount,
         source,
@@ -64,7 +65,16 @@ class TransactionController {
         type: 'manual',
         date: new Date()
       });
-  
+
+      await notifyOrganization({
+        organizationId,
+        title: 'Expenditure Deleted 🔔',
+        message: `${income.description} - ₦${income.amount} has been Deleted.`,
+        type: 'payment',
+        metadata: {
+          description: description
+        }
+      });
       res.status(201).json({
         success: true,
         data: income,
@@ -86,21 +96,21 @@ class TransactionController {
       const organizationId = this.getOrgId(req);
       const userRole = req.user.role;
       const { amount, purpose, description, receipt } = req.body;
-  
+
       if (!amount || amount <= 0) {
         return res.status(400).json({
           success: false,
           message: 'Amount must be greater than 0'
         });
       }
-  
+
       if (!purpose || purpose.trim() === '') {
         return res.status(400).json({
           success: false,
           message: 'Purpose of expenditure is required'
         });
       }
-  
+
       // FIXED: Always require organizationId for non-super-admin
       if (!organizationId && userRole !== 'super-admin' && userRole !== 'super_admin') {
         return res.status(400).json({
@@ -108,23 +118,23 @@ class TransactionController {
           message: 'Organization ID is required. Please ensure you are logged into an organization.'
         });
       }
-  
+
       // For non-super-admin, check if sufficient balance exists
       if (userRole !== 'super-admin' && userRole !== 'super_admin' && organizationId) {
         const orgObjectId = new mongoose.Types.ObjectId(organizationId);
-        
+
         const totalIncome = await Income.aggregate([
           { $match: { organizationId: orgObjectId } },
           { $group: { _id: null, total: { $sum: '$amount' } } }
         ]);
-  
+
         const totalExpenditure = await Expenditure.aggregate([
           { $match: { organizationId: orgObjectId } },
           { $group: { _id: null, total: { $sum: '$amount' } } }
         ]);
-  
+
         const balance = (totalIncome[0]?.total || 0) - (totalExpenditure[0]?.total || 0);
-  
+
         if (balance < amount) {
           return res.status(400).json({
             success: false,
@@ -133,7 +143,7 @@ class TransactionController {
           });
         }
       }
-  
+
       // FIXED: Always include organizationId (not conditionally)
       const expenditure = await Expenditure.create({
         amount,
@@ -144,7 +154,15 @@ class TransactionController {
         organizationId: organizationId,  // ✅ Always set this
         date: new Date()
       });
-  
+      await notifyOrganization({
+        organizationId,
+        title: 'Expenditure Created 🔔',
+        message: `${expenditure.description} - ₦${expenditure.amount} has been created.`,
+        type: 'payment',
+        metadata: {
+          description: description
+        }
+      });
       res.status(201).json({
         success: true,
         data: expenditure,
@@ -194,7 +212,7 @@ class TransactionController {
       const { startDate, endDate, source, type, page = 1, limit = 20 } = req.query;
 
       let query = {};
-      
+
       if (userRole !== 'super-admin' && userRole !== 'super_admin') {
         if (!organizationId) {
           return res.status(400).json({
@@ -275,7 +293,7 @@ class TransactionController {
       const { startDate, endDate, purpose, page = 1, limit = 20 } = req.query;
 
       let query = {};
-      
+
       if (userRole !== 'super-admin' && userRole !== 'super_admin') {
         if (!organizationId) {
           return res.status(400).json({
@@ -344,9 +362,9 @@ class TransactionController {
     try {
       const organizationId = this.getOrgId(req);
       const userRole = req.user.role;
-      
+
       let query = { _id: req.params.id };
-      
+
       if (userRole !== 'super-admin' && userRole !== 'super_admin') {
         if (!organizationId) {
           return res.status(400).json({
@@ -387,9 +405,9 @@ class TransactionController {
     try {
       const organizationId = this.getOrgId(req);
       const userRole = req.user.role;
-      
+
       let query = { _id: req.params.id };
-      
+
       if (userRole !== 'super-admin' && userRole !== 'super_admin') {
         if (!organizationId) {
           return res.status(400).json({
@@ -432,7 +450,7 @@ class TransactionController {
       const { amount, source, description } = req.body;
 
       let query = { _id: req.params.id };
-      
+
       if (userRole !== 'super-admin' && userRole !== 'super_admin') {
         if (!organizationId) {
           return res.status(400).json({
@@ -485,7 +503,15 @@ class TransactionController {
 
       income.updatedBy = req.user.id;
       await income.save();
-
+      await notifyOrganization({
+        organizationId,
+        title: 'Income Updated 🔔',
+        message: `${income.description} - ₦${income.amount} has been Updated.`,
+        type: 'payment',
+        metadata: {
+          description: description
+        }
+      });
       res.status(200).json({
         success: true,
         data: income,
@@ -509,7 +535,7 @@ class TransactionController {
       const { amount, purpose, description, receipt } = req.body;
 
       let query = { _id: req.params.id };
-      
+
       if (userRole !== 'super-admin' && userRole !== 'super_admin') {
         if (!organizationId) {
           return res.status(400).json({
@@ -580,7 +606,15 @@ class TransactionController {
 
       expenditure.updatedBy = req.user.id;
       await expenditure.save();
-
+      await notifyOrganization({
+        organizationId,
+        title: 'Exxpenditure Updated 🔔',
+        message: `${expenditure.description} - ₦${expenditure.amount} has been Updated.`,
+        type: 'payment',
+        metadata: {
+          description: description
+        }
+      });
       res.status(200).json({
         success: true,
         data: expenditure,
@@ -601,9 +635,9 @@ class TransactionController {
     try {
       const organizationId = this.getOrgId(req);
       const userRole = req.user.role;
-      
+
       let query = { _id: req.params.id };
-      
+
       if (userRole !== 'super-admin' && userRole !== 'super_admin') {
         if (!organizationId) {
           return res.status(400).json({
@@ -631,6 +665,15 @@ class TransactionController {
       }
 
       await income.deleteOne();
+      await notifyOrganization({
+        organizationId,
+        title: 'Income Deleted 🔔',
+        message: `${income.description} - ₦${income.amount} has been deleted.`,
+        type: 'payment',
+        metadata: {
+          description: description
+        }
+      });
 
       res.status(200).json({
         success: true,
@@ -651,9 +694,9 @@ class TransactionController {
     try {
       const organizationId = this.getOrgId(req);
       const userRole = req.user.role;
-      
+
       let query = { _id: req.params.id };
-      
+
       if (userRole !== 'super-admin' && userRole !== 'super_admin') {
         if (!organizationId) {
           return res.status(400).json({
@@ -675,6 +718,16 @@ class TransactionController {
 
       await expenditure.deleteOne();
 
+      await notifyOrganization({
+        organizationId,
+        title: 'Expenditure Deleted 🔔',
+        message: `${expenditure.purpose} - ₦${expenditure.amount} has been Deleted.`,
+        type: 'payment',
+        metadata: {
+          description: description
+        }
+      });
+
       res.status(200).json({
         success: true,
         message: 'Expenditure deleted successfully'
@@ -694,7 +747,7 @@ class TransactionController {
     try {
       const organizationId = this.getOrgId(req);
       const userRole = req.user.role;
-      
+
       if (userRole !== 'super-admin' && userRole !== 'super_admin') {
         if (!organizationId) {
           return res.status(400).json({
@@ -705,11 +758,11 @@ class TransactionController {
       }
 
       const orgObjectId = organizationId ? new mongoose.Types.ObjectId(organizationId) : null;
-      
+
       let incomeMatch = {};
       let expenditureMatch = {};
       let paymentMatch = {};
-      
+
       if (orgObjectId) {
         incomeMatch = { organizationId: orgObjectId };
         expenditureMatch = { organizationId: orgObjectId };
@@ -799,9 +852,9 @@ class TransactionController {
     try {
       const organizationId = this.getOrgId(req);
       const userRole = req.user.role;
-      
+
       let matchCondition = {};
-      
+
       if (userRole !== 'super-admin' && userRole !== 'super_admin') {
         if (!organizationId) {
           return res.status(400).json({
@@ -850,9 +903,9 @@ class TransactionController {
     try {
       const organizationId = this.getOrgId(req);
       const userRole = req.user.role;
-      
+
       let matchCondition = {};
-      
+
       if (userRole !== 'super-admin' && userRole !== 'super_admin') {
         if (!organizationId) {
           return res.status(400).json({
@@ -908,149 +961,149 @@ class TransactionController {
  * @route GET /api/transactions/income/public
  * @access Private (Authenticated users)
  */
-async getAllIncomesPublic(req, res, next) {
-  try {
-    const organizationId = req.user.organizationId;
-    const userRole = req.user.role;
-    const { startDate, endDate, page = 1, limit = 50 } = req.query;
+  async getAllIncomesPublic(req, res, next) {
+    try {
+      const organizationId = req.user.organizationId;
+      const userRole = req.user.role;
+      const { startDate, endDate, page = 1, limit = 50 } = req.query;
 
-    let query = {};
-    
-    // Super admin sees all, regular users see only their organization
-    if (userRole !== 'super-admin' && userRole !== 'super_admin') {
-      if (!organizationId) {
-        return res.status(400).json({
-          success: false,
-          message: 'Organization ID not found for this user'
-        });
-      }
-      query.organizationId = organizationId;
-    }
+      let query = {};
 
-    // FIXED: Use createdAt instead of date
-    if (startDate && endDate) {
-      query.createdAt = {
-        $gte: new Date(startDate),
-        $lte: new Date(endDate)
-      };
-    }
-
-    const skip = (parseInt(page) - 1) * parseInt(limit);
-    const limitNum = parseInt(limit);
-
-    const [incomes, total, totalAmount] = await Promise.all([
-      Income.find(query)
-        .select('-createdBy -updatedBy -__v')
-        .sort({ createdAt: -1 })  // FIXED: Use createdAt instead of date
-        .skip(skip)
-        .limit(limitNum)
-        .lean(),
-      Income.countDocuments(query),
-      Income.aggregate([
-        { $match: query },
-        { $group: { _id: null, total: { $sum: '$amount' } } }
-      ])
-    ]);
-
-    console.log(`Found ${incomes.length} income records for organization ${organizationId}`);
-
-    res.status(200).json({
-      success: true,
-      data: {
-        records: incomes,  // ← Wrap in records property
-        summary: {
-          total: totalAmount[0]?.total || 0,
-          count: total
-        },
-        pagination: {
-          page: parseInt(page),
-          limit: limitNum,
-          total,
-          pages: Math.ceil(total / limitNum)
+      // Super admin sees all, regular users see only their organization
+      if (userRole !== 'super-admin' && userRole !== 'super_admin') {
+        if (!organizationId) {
+          return res.status(400).json({
+            success: false,
+            message: 'Organization ID not found for this user'
+          });
         }
+        query.organizationId = organizationId;
       }
-    });
-  } catch (error) {
-    console.error('Error in getAllIncomesPublic:', error);
-    next(error);
-  }
-}
-  
 
-
- // Update getAllExpendituresPublic method
-/**
- * Get all expenditure records for public/member viewing (Read-only, scoped)
- * @route GET /api/transactions/expenditure/public
- * @access Private (Authenticated users)
- */
-async getAllExpendituresPublic(req, res, next) {
-  try {
-    const organizationId = req.user.organizationId;
-    const userRole = req.user.role;
-    const { startDate, endDate, page = 1, limit = 50 } = req.query;
-
-    let query = {};
-    
-    // Super admin sees all, regular users see only their organization
-    if (userRole !== 'super-admin' && userRole !== 'super_admin') {
-      if (!organizationId) {
-        return res.status(400).json({
-          success: false,
-          message: 'Organization ID not found for this user'
-        });
+      // FIXED: Use createdAt instead of date
+      if (startDate && endDate) {
+        query.createdAt = {
+          $gte: new Date(startDate),
+          $lte: new Date(endDate)
+        };
       }
-      query.organizationId = organizationId;
-    }
 
-    // FIXED: Use createdAt instead of date
-    if (startDate && endDate) {
-      query.createdAt = {
-        $gte: new Date(startDate),
-        $lte: new Date(endDate)
-      };
-    }
+      const skip = (parseInt(page) - 1) * parseInt(limit);
+      const limitNum = parseInt(limit);
 
-    const skip = (parseInt(page) - 1) * parseInt(limit);
-    const limitNum = parseInt(limit);
+      const [incomes, total, totalAmount] = await Promise.all([
+        Income.find(query)
+          .select('-createdBy -updatedBy -__v')
+          .sort({ createdAt: -1 })  // FIXED: Use createdAt instead of date
+          .skip(skip)
+          .limit(limitNum)
+          .lean(),
+        Income.countDocuments(query),
+        Income.aggregate([
+          { $match: query },
+          { $group: { _id: null, total: { $sum: '$amount' } } }
+        ])
+      ]);
 
-    const [expenditures, total, totalAmount] = await Promise.all([
-      Expenditure.find(query)
-        .select('-createdBy -updatedBy -__v -receipt')
-        .sort({ createdAt: -1 })  // FIXED: Use createdAt instead of date
-        .skip(skip)
-        .limit(limitNum)
-        .lean(),
-      Expenditure.countDocuments(query),
-      Expenditure.aggregate([
-        { $match: query },
-        { $group: { _id: null, total: { $sum: '$amount' } } }
-      ])
-    ]);
+      console.log(`Found ${incomes.length} income records for organization ${organizationId}`);
 
-    console.log(`Found ${expenditures.length} expenditure records for organization ${organizationId}`);
-
-    res.status(200).json({
-      success: true,
-      data: {
-        records: expenditures,
-        summary: {
-          total: totalAmount[0]?.total || 0,
-          count: total
-        },
-        pagination: {
-          page: parseInt(page),
-          limit: limitNum,
-          total,
-          pages: Math.ceil(total / limitNum)
+      res.status(200).json({
+        success: true,
+        data: {
+          records: incomes,  // ← Wrap in records property
+          summary: {
+            total: totalAmount[0]?.total || 0,
+            count: total
+          },
+          pagination: {
+            page: parseInt(page),
+            limit: limitNum,
+            total,
+            pages: Math.ceil(total / limitNum)
+          }
         }
-      }
-    });
-  } catch (error) {
-    console.error('Error in getAllExpendituresPublic:', error);
-    next(error);
+      });
+    } catch (error) {
+      console.error('Error in getAllIncomesPublic:', error);
+      next(error);
+    }
   }
-}
+
+
+
+  // Update getAllExpendituresPublic method
+  /**
+   * Get all expenditure records for public/member viewing (Read-only, scoped)
+   * @route GET /api/transactions/expenditure/public
+   * @access Private (Authenticated users)
+   */
+  async getAllExpendituresPublic(req, res, next) {
+    try {
+      const organizationId = req.user.organizationId;
+      const userRole = req.user.role;
+      const { startDate, endDate, page = 1, limit = 50 } = req.query;
+
+      let query = {};
+
+      // Super admin sees all, regular users see only their organization
+      if (userRole !== 'super-admin' && userRole !== 'super_admin') {
+        if (!organizationId) {
+          return res.status(400).json({
+            success: false,
+            message: 'Organization ID not found for this user'
+          });
+        }
+        query.organizationId = organizationId;
+      }
+
+      // FIXED: Use createdAt instead of date
+      if (startDate && endDate) {
+        query.createdAt = {
+          $gte: new Date(startDate),
+          $lte: new Date(endDate)
+        };
+      }
+
+      const skip = (parseInt(page) - 1) * parseInt(limit);
+      const limitNum = parseInt(limit);
+
+      const [expenditures, total, totalAmount] = await Promise.all([
+        Expenditure.find(query)
+          .select('-createdBy -updatedBy -__v -receipt')
+          .sort({ createdAt: -1 })  // FIXED: Use createdAt instead of date
+          .skip(skip)
+          .limit(limitNum)
+          .lean(),
+        Expenditure.countDocuments(query),
+        Expenditure.aggregate([
+          { $match: query },
+          { $group: { _id: null, total: { $sum: '$amount' } } }
+        ])
+      ]);
+
+      console.log(`Found ${expenditures.length} expenditure records for organization ${organizationId}`);
+
+      res.status(200).json({
+        success: true,
+        data: {
+          records: expenditures,
+          summary: {
+            total: totalAmount[0]?.total || 0,
+            count: total
+          },
+          pagination: {
+            page: parseInt(page),
+            limit: limitNum,
+            total,
+            pages: Math.ceil(total / limitNum)
+          }
+        }
+      });
+    } catch (error) {
+      console.error('Error in getAllExpendituresPublic:', error);
+      next(error);
+    }
+  }
 
   /**
    * Get recent transactions (scoped)
@@ -1066,7 +1119,7 @@ async getAllExpendituresPublic(req, res, next) {
 
       let incomeQuery = {};
       let expenditureQuery = {};
-      
+
       if (userRole !== 'super-admin' && userRole !== 'super_admin') {
         if (!organizationId) {
           return res.status(400).json({

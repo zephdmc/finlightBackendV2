@@ -21,10 +21,10 @@ console.log('   Platform Subaccount:', PLATFORM_SUBACCOUNT ? 'Configured' : 'MIS
 // ==================== RATE LIMITING ====================
 
 const paymentInitLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000,
-    max: 100,
-    standardHeaders: true,
-    legacyHeaders: false,
+  windowMs: 15 * 60 * 1000,
+  max: 100,
+  standardHeaders: true,
+  legacyHeaders: false,
 });
 
 const webhookLimiter = rateLimit({
@@ -71,43 +71,43 @@ const verificationInProgress = new Map();
  */
 const calculateMemberPayAmount = (targetOrganizationAmount) => {
   if (!targetOrganizationAmount || targetOrganizationAmount <= 0) return 0;
-  
+
   let memberPays = targetOrganizationAmount;
   let iteration = 0;
   const maxIterations = 30;
-  
+
   while (iteration < maxIterations) {
     // Calculate Paystack fee based on memberPays
     let paystackFee = memberPays * 0.015;
     if (memberPays >= 2500) paystackFee += 100;
     paystackFee = Math.min(paystackFee, 2000);
-    
+
     const afterPaystack = memberPays - paystackFee;
     let platformFee = afterPaystack * 0.04;
-    
+
     // Round platform fee
     platformFee = Math.round(platformFee * 100) / 100;
-    
+
     const orgGets = Math.round(afterPaystack - platformFee);
-    
+
     // If organization gets exactly what we want, we're done
     if (orgGets === targetOrganizationAmount) {
       break;
     }
-    
+
     // If within 1 naira, adjust to exact amount
     if (Math.abs(orgGets - targetOrganizationAmount) <= 1) {
       const difference = targetOrganizationAmount - orgGets;
       memberPays += difference;
       break;
     }
-    
+
     // Adjust memberPays based on the difference
     const difference = targetOrganizationAmount - orgGets;
     memberPays += difference;
     iteration++;
   }
-  
+
   return Math.ceil(memberPays);
 };
 
@@ -123,21 +123,21 @@ const calculateNetToOrganization = (amountPaid) => {
   let paystackFee = amountPaid * 0.015;
   if (amountPaid >= 2500) paystackFee += 100;
   paystackFee = Math.min(paystackFee, 2000);
-  
+
   const afterPaystack = amountPaid - paystackFee;
   let platformFee = afterPaystack * 0.04;
-  
+
   // Round platform fee to nearest kobo
   platformFee = Math.round(platformFee * 100) / 100;
-  
+
   let netToOrg = afterPaystack - platformFee;
-  
+
   // Round net to nearest whole number
   netToOrg = Math.round(netToOrg);
-  
+
   // Calculate total fees paid (rounded)
   const totalFees = amountPaid - netToOrg;
-  
+
   return {
     amountPaid,
     paystackFee: Math.round(paystackFee),
@@ -157,15 +157,15 @@ const calculateNetToOrganization = (amountPaid) => {
 const processPartialPayment = async (originalPayment, amountPaid, reference, isManual = false) => {
   const targetOrgAmount = originalPayment.targetOrgAmount || originalPayment.amount;
   const totalPaidSoFar = (originalPayment.totalPaidSoFar || 0) + amountPaid;
-  
+
   // Calculate what organization gets from THIS payment (after fees)
   const fees = calculateNetToOrganization(amountPaid);
   const netToOrgFromThisPayment = fees.netToOrg;
-  
+
   // The organization's target amount remains the same (e.g., ₦5,000)
   // The remaining amount the organization still needs to receive
   const remainingOrgTarget = targetOrgAmount - totalPaidSoFar;
-  
+
   // Update original payment
   originalPayment.totalPaidSoFar = totalPaidSoFar;
   originalPayment.remainingAmount = remainingOrgTarget;
@@ -182,16 +182,16 @@ const processPartialPayment = async (originalPayment, amountPaid, reference, isM
       totalFees: fees.totalFees
     }
   });
-  
+
   if (remainingOrgTarget <= 0) {
     originalPayment.status = 'paid';
     originalPayment.completedAt = new Date();
   } else {
     originalPayment.status = 'partial';
   }
-  
+
   await originalPayment.save();
-  
+
   // Record INCOME for this partial payment (what org actually gets from this transaction)
   await Income.create({
     amount: netToOrgFromThisPayment,
@@ -203,7 +203,7 @@ const processPartialPayment = async (originalPayment, amountPaid, reference, isM
     transactionReference: reference,
     organizationId: originalPayment.user?.organizationId,
     createdBy: originalPayment.user?._id,
-    metadata: { 
+    metadata: {
       isPartial: true,
       partialAmount: amountPaid,
       netToOrg: netToOrgFromThisPayment,
@@ -211,7 +211,7 @@ const processPartialPayment = async (originalPayment, amountPaid, reference, isM
       fees: { paystackFee: fees.paystackFee, platformFee: fees.platformFee }
     }
   });
-  
+
   // Create or update outstanding payment record for remaining target amount
   let outstandingPayment = null;
   if (remainingOrgTarget > 0) {
@@ -220,7 +220,7 @@ const processPartialPayment = async (originalPayment, amountPaid, reference, isM
       type: 'outstanding',
       status: 'unpaid'
     });
-    
+
     if (outstandingPayment) {
       outstandingPayment.amount = remainingOrgTarget;
       outstandingPayment.targetOrgAmount = remainingOrgTarget;
@@ -245,9 +245,10 @@ const processPartialPayment = async (originalPayment, amountPaid, reference, isM
     }
     console.log(`📝 Created outstanding record: ₦${remainingOrgTarget.toLocaleString()} for ${originalPayment.name}`);
   }
-  
+
   console.log(`💰 Partial payment processed: Paid ₦${amountPaid.toLocaleString()} → Org net: ₦${netToOrgFromThisPayment.toLocaleString()}, Remaining target: ₦${remainingOrgTarget.toLocaleString()}`);
-  
+
+
   return {
     amountPaid,
     netToOrg: netToOrgFromThisPayment,
@@ -276,35 +277,35 @@ const validatePaymentVerification = [
 router.post('/initialize', protect, paymentInitLimiter, validatePaymentInit, async (req, res) => {
   try {
     const { paymentId, idempotencyKey } = req.body;
-    
+
     console.log('📦 Payment initialization:', { paymentId });
-    
+
     const payment = await Payment.findById(paymentId).populate('user', 'name email organizationId');
-    
+
     if (!payment) {
       return res.status(404).json({ success: false, message: 'Payment not found' });
     }
-    
+
     if (payment.user._id.toString() !== req.user.id && req.user.role !== 'admin') {
       return res.status(403).json({ success: false, message: 'Not authorized' });
     }
-    
+
     if (payment.status === 'paid') {
       return res.status(400).json({ success: false, message: 'Payment already completed' });
     }
-    
+
     const targetOrgAmount = payment.amount;
     const memberPayAmount = calculateMemberPayAmount(targetOrgAmount);
-    
+
     console.log(`💰 Target org amount: ₦${targetOrgAmount} → Member should pay: ₦${memberPayAmount} (includes fees)`);
-    
+
     if (!validateAmount(memberPayAmount)) {
       return res.status(400).json({ success: false, message: 'Invalid payment amount calculation' });
     }
-    
+
     let organizationSubaccount = null;
     let organization = null;
-    
+
     if (payment.user.organizationId) {
       organization = await Organization.findById(payment.user.organizationId);
       if (organization?.paystack?.subaccountCode) {
@@ -314,23 +315,23 @@ router.post('/initialize', protect, paymentInitLimiter, validatePaymentInit, asy
         console.log(`⚠️ No subaccount for organization: ${payment.user.organizationId}`);
       }
     }
-    
+
     if (!organizationSubaccount) {
       return res.status(400).json({
         success: false,
         message: 'Organization payment setup incomplete. Please contact admin.'
       });
     }
-    
+
     if (!PLATFORM_SUBACCOUNT) {
       return res.status(500).json({
         success: false,
         message: 'Platform configuration error. Please contact support.'
       });
     }
-    
+
     const uniqueRef = `${Date.now()}-${crypto.randomBytes(8).toString('hex')}`;
-    
+
     const requestBody = {
       email: payment.user.email,
       amount: Math.round(memberPayAmount * 100),
@@ -348,9 +349,9 @@ router.post('/initialize', protect, paymentInitLimiter, validatePaymentInit, asy
         memberPayAmount: memberPayAmount
       }
     };
-    
+
     console.log('📤 Sending to Paystack with amount:', memberPayAmount);
-    
+
     const response = await fetch('https://api.paystack.co/transaction/initialize', {
       method: 'POST',
       headers: {
@@ -360,20 +361,20 @@ router.post('/initialize', protect, paymentInitLimiter, validatePaymentInit, asy
       },
       body: JSON.stringify(requestBody)
     });
-    
+
     const data = await response.json();
     console.log('📥 Paystack response:', data.status ? 'Success' : 'Failed', data.message);
-    
+
     if (!data.status) {
       return res.status(400).json({ success: false, message: data.message || 'Failed to initialize payment' });
     }
-    
+
     payment.transactionReference = data.data.reference;
     payment.paymentUrl = data.data.authorization_url;
     payment.expectedAmount = memberPayAmount;
     payment.targetOrgAmount = targetOrgAmount;
     await payment.save();
-    
+
     res.status(200).json({
       success: true,
       data: {
@@ -383,7 +384,7 @@ router.post('/initialize', protect, paymentInitLimiter, validatePaymentInit, asy
         targetOrgAmount
       }
     });
-    
+
   } catch (error) {
     console.error('Payment initialization error:', error);
     res.status(500).json({ success: false, message: error.message || 'Internal server error' });
@@ -394,7 +395,7 @@ router.post('/initialize', protect, paymentInitLimiter, validatePaymentInit, asy
 
 router.get('/verify/:reference', verifyLimiter, validatePaymentVerification, async (req, res) => {
   const { reference } = req.params;
-  
+
   // Check if this reference is already being processed
   if (verificationInProgress.has(reference)) {
     console.log('⏳ Verification already in progress for:', reference);
@@ -403,8 +404,8 @@ router.get('/verify/:reference', verifyLimiter, validatePaymentVerification, asy
     if (payment && payment.status === 'paid') {
       return res.status(200).json({
         success: true,
-        data: { 
-          status: payment.status, 
+        data: {
+          status: payment.status,
           amount: payment.amount,
           remainingAmount: payment.remainingAmount
         },
@@ -412,33 +413,33 @@ router.get('/verify/:reference', verifyLimiter, validatePaymentVerification, asy
       });
     }
   }
-  
+
   // Create a promise to track this verification
   let resolveVerification;
   const verificationPromise = new Promise((resolve) => {
     resolveVerification = resolve;
   });
   verificationInProgress.set(reference, verificationPromise);
-  
+
   try {
     console.log('🔍 Verifying payment:', reference);
-    
+
     let payment = await Payment.findOne({ transactionReference: reference })
       .populate('user', 'name email organizationId');
-    
+
     if (!payment) {
       const match = reference.match(/PAY-([a-f0-9]+)-/);
       if (match && match[1]) {
         payment = await Payment.findById(match[1]).populate('user', 'name email organizationId');
       }
     }
-    
+
     if (!payment) {
       verificationInProgress.delete(reference);
       resolveVerification();
       return res.status(404).json({ success: false, message: 'Payment not found' });
     }
-    
+
     // Check if already paid
     if (payment.status === 'paid') {
       console.log('✅ Payment already verified and marked as paid');
@@ -446,8 +447,8 @@ router.get('/verify/:reference', verifyLimiter, validatePaymentVerification, asy
       resolveVerification();
       return res.status(200).json({
         success: true,
-        data: { 
-          status: payment.status, 
+        data: {
+          status: payment.status,
           amount: payment.amount,
           remainingAmount: payment.remainingAmount,
           isPartial: payment.isPartial
@@ -455,26 +456,26 @@ router.get('/verify/:reference', verifyLimiter, validatePaymentVerification, asy
         message: 'Payment already verified'
       });
     }
-    
+
     const response = await fetch(`https://api.paystack.co/transaction/verify/${reference}`, {
       method: 'GET',
       headers: { 'Authorization': `Bearer ${PAYSTACK_SECRET_KEY}` }
     });
-    
+
     const data = await response.json();
-    
+
     if (data.status && data.data && data.data.status === 'success') {
       const amountPaid = data.data.amount / 100;
       const expectedAmount = payment.expectedAmount || payment.amount;
-      
+
       // Check if this is a partial payment (paid less than expected by more than 1 Naira)
       const isPartialPayment = amountPaid < (expectedAmount - 1);
-      
+
       console.log(`💰 Amount paid: ₦${amountPaid}, Expected: ₦${expectedAmount}, Is Partial: ${isPartialPayment}`);
       console.log(`Current payment status before update: ${payment.status}, remaining: ${payment.remainingAmount}`);
-      
+
       let result;
-      
+
       if (isPartialPayment) {
         // Process partial payment - KEEPS Income creation (as requested)
         result = await processPartialPayment(payment, amountPaid, reference, false);
@@ -482,7 +483,7 @@ router.get('/verify/:reference', verifyLimiter, validatePaymentVerification, asy
       } else {
         // ✅ FULL PAYMENT - NO INCOME CREATION (just update payment status)
         const exactOrgAmount = payment.targetOrgAmount || payment.amount;
-        
+
         // Force update using findOneAndUpdate
         const updatedPayment = await Payment.findOneAndUpdate(
           { _id: payment._id },
@@ -500,29 +501,29 @@ router.get('/verify/:reference', verifyLimiter, validatePaymentVerification, asy
           },
           { new: true }
         );
-        
+
         console.log(`✅ Full payment recorded: Organization receives ₦${exactOrgAmount}`);
         console.log(`📝 No Income record created - Payment record is the source of truth`);
-        
+
         // ❌ Income.create() REMOVED - not creating income for full payments
-        
+
         payment = updatedPayment;
         result = { remainingTarget: 0 };
       }
-      
+
       if (payment.type === 'registration') {
         await User.findByIdAndUpdate(payment.user, { hasPaidRegistration: true });
       }
-      
+
       console.log(`✅ Payment verified: Member paid ₦${amountPaid.toFixed(2)}, Final Status: ${payment.status}`);
-      
+
       verificationInProgress.delete(reference);
       resolveVerification();
-      
+
       res.status(200).json({
         success: true,
-        data: { 
-          status: payment.status, 
+        data: {
+          status: payment.status,
           amount: payment.amount,
           isPartial: isPartialPayment || false,
           remainingAmount: result?.remainingTarget || payment.remainingAmount || 0,
@@ -552,32 +553,32 @@ router.post('/webhook', webhookLimiter, async (req, res) => {
     } else {
       rawBody = JSON.stringify(req.body);
     }
-    
+
     const hash = crypto.createHmac('sha512', PAYSTACK_SECRET_KEY)
       .update(rawBody)
       .digest('hex');
-    
+
     if (hash !== req.headers['x-paystack-signature']) {
       console.log('❌ Invalid webhook signature');
       return res.status(401).json({ success: false });
     }
-    
+
     const event = req.body;
     console.log('📨 Webhook received:', event.event);
-    
+
     if (event.event === 'charge.success') {
       const { reference, amount } = event.data;
-      
-      const payment = await Payment.findOne({ 
+
+      const payment = await Payment.findOne({
         transactionReference: reference,
         status: { $ne: 'paid' }
       }).populate('user', 'organizationId');
-      
+
       if (payment && payment.status !== 'paid') {
         const amountPaid = amount / 100;
         const expectedAmount = payment.expectedAmount || payment.amount;
         const isPartialPayment = amountPaid < (expectedAmount - 1);
-        
+
         if (isPartialPayment) {
           // Partial payment - KEEPS Income creation
           await processPartialPayment(payment, amountPaid, reference, false);
@@ -585,7 +586,7 @@ router.post('/webhook', webhookLimiter, async (req, res) => {
         } else {
           // ✅ FULL PAYMENT - NO INCOME CREATION in webhook either
           const fees = calculateNetToOrganization(amountPaid);
-          
+
           // Force update using findOneAndUpdate
           await Payment.findOneAndUpdate(
             { _id: payment._id },
@@ -602,15 +603,15 @@ router.post('/webhook', webhookLimiter, async (req, res) => {
               }
             }
           );
-          
+
           // ❌ NO Income.create() for full payments in webhook
           console.log(`✅ Webhook - Full payment recorded. No Income record created.`);
         }
-        
+
         console.log(`✅ Webhook processed: Member paid ₦${amountPaid.toFixed(2)}`);
       }
     }
-    
+
     res.status(200).json({ success: true });
   } catch (error) {
     console.error('Webhook error:', error);
@@ -623,27 +624,27 @@ router.post('/webhook', webhookLimiter, async (req, res) => {
 router.post('/record-partial-payment', protect, async (req, res) => {
   try {
     const { paymentId, amountPaid, reference, notes } = req.body;
-    
+
     const originalPayment = await Payment.findById(paymentId).populate('user', 'organizationId');
-    
+
     if (!originalPayment) {
       return res.status(404).json({ success: false, message: 'Payment not found' });
     }
-    
+
     if (originalPayment.user.organizationId.toString() !== req.user.organizationId?.toString() && req.user.role !== 'admin') {
       return res.status(403).json({ success: false, message: 'Not authorized' });
     }
-    
+
     if (originalPayment.status === 'paid') {
       return res.status(400).json({ success: false, message: 'Payment already completed' });
     }
-    
+
     if (!amountPaid || amountPaid <= 0) {
       return res.status(400).json({ success: false, message: 'Valid amount is required' });
     }
-    
+
     const result = await processPartialPayment(originalPayment, amountPaid, reference || `MANUAL-${Date.now()}`, true);
-    
+
     res.status(200).json({
       success: true,
       data: {
@@ -653,7 +654,7 @@ router.post('/record-partial-payment', protect, async (req, res) => {
         remainingTarget: result.remainingTarget,
         outstandingPayment: result.outstandingPayment
       },
-      message: result.remainingTarget > 0 
+      message: result.remainingTarget > 0
         ? `Partial payment of ₦${amountPaid.toLocaleString()} recorded. Organization receives ₦${result.netToOrg.toLocaleString()}. Outstanding balance: ₦${result.remainingTarget.toLocaleString()}`
         : 'Payment completed successfully'
     });
@@ -673,13 +674,13 @@ router.get('/outstanding', protect, async (req, res) => {
       type: 'outstanding',
       remainingAmount: { $gt: 0 }
     };
-    
+
     const outstandingPayments = await Payment.find(query)
       .populate('paymentTypeId', 'name type')
       .sort({ dueDate: 1, createdAt: 1 });
-    
+
     const totalOutstanding = outstandingPayments.reduce((sum, p) => sum + (p.remainingAmount || p.amount), 0);
-    
+
     res.status(200).json({
       success: true,
       data: {
@@ -700,15 +701,15 @@ router.get('/status/:paymentId', protect, statusCheckLimiter, ValidationMiddlewa
   try {
     const { paymentId } = req.params;
     const payment = await Payment.findById(paymentId).populate('user', 'name email');
-    
+
     if (!payment) {
       return res.status(404).json({ success: false, message: 'Payment not found' });
     }
-    
+
     if (payment.user._id.toString() !== req.user.id && req.user.role !== 'admin') {
       return res.status(403).json({ success: false, message: 'Not authorized' });
     }
-    
+
     res.status(200).json({
       success: true,
       data: {
@@ -731,8 +732,8 @@ router.get('/status/:paymentId', protect, statusCheckLimiter, ValidationMiddlewa
 // ==================== TEST ROUTES ====================
 
 router.get('/test-route', (req, res) => {
-  res.json({ 
-    success: true, 
+  res.json({
+    success: true,
     message: 'Test route works!',
     registeredRoutes: ['/health', '/verify/:reference', '/webhook', '/initialize', '/status/:paymentId', '/outstanding', '/record-partial-payment']
   });
@@ -740,8 +741,8 @@ router.get('/test-route', (req, res) => {
 
 router.all('/webhook-test', (req, res) => {
   console.log('🔥 Test webhook hit!');
-  res.json({ 
-    success: true, 
+  res.json({
+    success: true,
     message: 'Test webhook endpoint works!',
     method: req.method
   });

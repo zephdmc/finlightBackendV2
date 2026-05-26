@@ -16,6 +16,7 @@ const userRoutes = require('./routes/users');
 const paymentRoutes = require('./routes/payments');
 const paymentTypeRoutes = require('./routes/paymentTypes');
 const transactionRoutes = require('./routes/transactions');
+const notification = require('./routes/notificationRoute')
 // const paymentGatewayRoutes = require('./routes/paymentGateway');
 const reportRoutes = require('./routes/reports');
 const errorHandler = require('./middleware/errorHandler');
@@ -146,19 +147,19 @@ app.use(session(sessionConfig));
 app.use((req, res, next) => {
   // Remove X-Powered-By header
   res.removeHeader('X-Powered-By');
-  
+
   // Additional security headers
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('X-XSS-Protection', '1; mode=block');
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
   res.setHeader('Permissions-Policy', 'geolocation=(), microphone=(), camera=()');
-  
+
   // Strict Transport Security (HSTS) - only in production
   if (process.env.NODE_ENV === 'production') {
     res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains; preload');
   }
-  
+
   next();
 });
 
@@ -179,8 +180,8 @@ if (process.env.NODE_ENV === 'development') {
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {
-  res.json({ 
-    status: 'OK', 
+  res.json({
+    status: 'OK',
     timestamp: new Date(),
     uptime: process.uptime(),
     environment: process.env.NODE_ENV,
@@ -201,7 +202,7 @@ app.get('/api', (req, res) => {
     environment: process.env.NODE_ENV,
     timestamp: new Date().toISOString()
   };
-  
+
   // Only show endpoints in development
   if (process.env.NODE_ENV === 'development') {
     info.endpoints = {
@@ -214,7 +215,7 @@ app.get('/api', (req, res) => {
       paymentGateway: '/api/payment-gateway'
     };
   }
-  
+
   res.json(info);
 });
 
@@ -227,9 +228,10 @@ app.use('/api/transactions', transactionRoutes);
 app.use('/api/reports', reportRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/organizations', organizationRoutes);
+app.use('/api/notification', notification)
 
 // Add this BEFORE the payment gateway routes
-app.use(express.json({ 
+app.use(express.json({
   limit: '10kb',
   verify: (req, res, buf, encoding) => {
     req.rawBody = buf.toString();
