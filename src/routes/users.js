@@ -51,10 +51,10 @@ const auditUserAccess = (action) => {
     const originalEnd = res.end;
     const startTime = Date.now();
     const targetUserId = req.params.id || req.body.userId;
-    
-    res.end = function(chunk, encoding) {
+
+    res.end = function (chunk, encoding) {
       const responseTime = Date.now() - startTime;
-      
+
       // Only log if operation was performed on a user
       if (targetUserId || action === 'LIST_ALL' || action === 'EXPORT') {
         setImmediate(() => {
@@ -71,8 +71,8 @@ const auditUserAccess = (action) => {
                 method: req.method,
                 url: req.originalUrl,
                 targetUserId: targetUserId,
-                body: action === 'CREATE' || action === 'UPDATE' ? 
-                  { ...req.body, password: undefined, currentPassword: undefined } : 
+                body: action === 'CREATE' || action === 'UPDATE' ?
+                  { ...req.body, password: undefined, currentPassword: undefined } :
                   undefined
               },
               ip: req.ip,
@@ -86,10 +86,10 @@ const auditUserAccess = (action) => {
           }
         });
       }
-      
+
       originalEnd.call(this, chunk, encoding);
     };
-    
+
     next();
   };
 };
@@ -98,23 +98,23 @@ const auditUserAccess = (action) => {
 const checkUserAccess = async (req, res, next) => {
   try {
     const targetUserId = req.params.id;
-    
+
     // If no specific user target, allow (for listing endpoints)
     if (!targetUserId) {
       // Admin-only endpoints are already protected by roleCheck
       return next();
     }
-    
+
     // Admin can access any user
     if (req.user.role === 'admin') {
       return next();
     }
-    
+
     // Users can only access their own data
     if (req.user.id === targetUserId) {
       return next();
     }
-    
+
     // Check if user is trying to access a member's data (team leads might have access)
     // This is optional - implement if you have team lead roles
     if (req.user.role === 'team_lead') {
@@ -127,7 +127,7 @@ const checkUserAccess = async (req, res, next) => {
         }
       }
     }
-    
+
     return res.status(403).json({
       success: false,
       message: 'Access denied. You can only access your own user data.'
@@ -143,14 +143,14 @@ const validateUserExists = async (req, res, next) => {
   try {
     const User = require('../models/User');
     const user = await User.findById(req.params.id);
-    
+
     if (!user) {
       return res.status(404).json({
         success: false,
         message: 'User not found'
       });
     }
-    
+
     // Attach user to request for later use
     req.targetUser = user;
     next();
@@ -201,10 +201,10 @@ router.get(
     try {
       const { page = 1, limit = 20, search, role } = req.query;
       const User = require('../models/User');
-      
+
       // Build filter with organization scoping
       const filter = { organizationId: req.user.organizationId };
-      
+
       // Role-based filtering
       if (req.user.role !== 'admin') {
         // Non-admins can only see members (not other admins)
@@ -213,7 +213,7 @@ router.get(
         // Admins can filter by role
         filter.role = role;
       }
-      
+
       // Add search functionality
       if (search) {
         filter.$or = [
@@ -221,14 +221,14 @@ router.get(
           { email: { $regex: search, $options: 'i' } }
         ];
       }
-      
+
       const skip = (parseInt(page) - 1) * parseInt(limit);
-      
+
       // Select fields based on role
-      const selectFields = req.user.role === 'admin' 
+      const selectFields = req.user.role === 'admin'
         ? '-password -resetPasswordToken -resetPasswordExpire'
         : 'name email role createdAt hasPaidRegistration';
-      
+
       const [users, total] = await Promise.all([
         User.find(filter)
           .select(selectFields)
@@ -237,7 +237,7 @@ router.get(
           .limit(parseInt(limit)),
         User.countDocuments(filter)
       ]);
-      
+
       res.status(200).json({
         success: true,
         data: users,
@@ -270,33 +270,33 @@ router.get(
     try {
       const User = require('../models/User');
       const Payment = require('../models/Payment');
-      
+
       // Add organization scoping
       const organizationFilter = { organizationId: req.user.organizationId };
-      
+
       const [totalUsers, adminCount, memberCount, registrationStats] = await Promise.all([
         User.countDocuments(organizationFilter),
         User.countDocuments({ ...organizationFilter, role: 'admin' }),
         User.countDocuments({ ...organizationFilter, role: 'member' }),
         Payment.aggregate([
-          { 
-            $match: { 
+          {
+            $match: {
               type: 'registration',
-              ...organizationFilter 
-            } 
+              ...organizationFilter
+            }
           },
-          { 
-            $group: { 
-              _id: '$status', 
-              count: { $sum: 1 } 
-            } 
+          {
+            $group: {
+              _id: '$status',
+              count: { $sum: 1 }
+            }
           }
         ])
       ]);
-      
+
       const paidRegistration = registrationStats.find(s => s._id === 'paid')?.count || 0;
       const unpaidRegistration = registrationStats.find(s => s._id === 'unpaid')?.count || 0;
-      
+
       res.status(200).json({
         success: true,
         data: {
@@ -334,7 +334,7 @@ router.post(
       // Ensure new user belongs to the admin's organization
       req.body.organizationId = req.user.organizationId;
       req.body.createdBy = req.user.id;
-      
+
       // Forward to controller
       userController.registerMember(req, res, next);
     } catch (error) {
@@ -364,7 +364,7 @@ router.post(
         createdBy: req.user.id,
         role: 'member' // Force role to member for security
       }));
-      
+
       userController.bulkImportMembers(req, res, next);
     } catch (error) {
       next(error);
@@ -386,14 +386,14 @@ router.get(
   async (req, res, next) => {
     try {
       const User = require('../models/User');
-      
+
       // Select fields based on requester role
       const selectFields = req.user.role === 'admin' || req.user.id === req.params.id
         ? '-password -resetPasswordToken -resetPasswordExpire'
         : 'name email role createdAt hasPaidRegistration';
-      
+
       const user = await User.findById(req.params.id).select(selectFields);
-      
+
       res.status(200).json({
         success: true,
         data: user
@@ -421,21 +421,21 @@ router.put(
   async (req, res, next) => {
     try {
       const User = require('../models/User');
-      
+
       // Prevent non-admins from changing role
       if (req.user.role !== 'admin' && req.body.role) {
         delete req.body.role;
       }
-      
+
       // Prevent changing organization ID
       if (req.body.organizationId) {
         delete req.body.organizationId;
       }
-      
+
       // Add updater information
       req.body.updatedBy = req.user.id;
       req.body.updatedAt = new Date();
-      
+
       userController.updateUser(req, res, next);
     } catch (error) {
       next(error);
@@ -465,15 +465,25 @@ router.delete(
           message: 'Cannot delete your own account. Ask another admin to do this.'
         });
       }
-      
+
       // Ensure user belongs to same organization
-      if (req.targetUser.organizationId.toString() !== req.user.organizationId) {
+      // if (req.targetUser.organizationId.toString() !== req.user.organizationId) {
+      //   return res.status(403).json({
+      //     success: false,
+      //     message: 'Cannot delete users from other organizations'
+      //   });
+      // }
+
+      if (
+        req.targetUser.organizationId.toString() !==
+        req.user.organizationId.toString()
+      ) {
         return res.status(403).json({
           success: false,
           message: 'Cannot delete users from other organizations'
         });
       }
-      
+
       userController.deleteUser(req, res, next);
     } catch (error) {
       next(error);
@@ -504,7 +514,7 @@ router.post(
           message: 'Cannot reset password for users from other organizations'
         });
       }
-      
+
       userController.resetPassword(req, res, next);
     } catch (error) {
       next(error);
@@ -532,7 +542,7 @@ router.post(
 //           message: 'Access denied'
 //         });
 //       }
-      
+
 //       userController.getMemberPaymentSummary(req, res, next);
 //     } catch (error) {
 //       next(error);
@@ -557,11 +567,11 @@ router.get(
   async (req, res, next) => {
     try {
       const { id } = req.params;
-      
+
       // Convert both to strings for proper comparison
       const requestingUserId = req.user.id.toString();
       const targetUserId = id.toString();
-      
+
       // Authorization: admin OR requesting own data
       if (req.user.role !== 'admin' && requestingUserId !== targetUserId) {
         console.log(`Authorization failed: User ${requestingUserId} (role: ${req.user.role}) tried to access ${targetUserId}`);
@@ -570,18 +580,18 @@ router.get(
           message: 'Not authorized to view this payment summary'
         });
       }
-      
+
       // Add organization check
       const User = require('../models/User');
       const targetUser = await User.findById(id);
-      
+
       if (!targetUser) {
         return res.status(404).json({
           success: false,
           message: 'User not found'
         });
       }
-      
+
       // For non-admin users, ensure they belong to the same organization
       if (req.user.role !== 'admin' && targetUser.organizationId.toString() !== req.user.organizationId.toString()) {
         return res.status(403).json({
@@ -589,7 +599,7 @@ router.get(
           message: 'Access denied'
         });
       }
-      
+
       // Call the controller
       userController.getMemberPaymentSummary(req, res, next);
     } catch (error) {
@@ -615,25 +625,25 @@ router.get(
       const { id } = req.params;
       const { page = 1, limit = 20, startDate, endDate } = req.query;
       const Payment = require('../models/Payment');
-      
+
       // Build filter with organization scoping
-      const filter = { 
+      const filter = {
         user: id,
         organizationId: req.user.organizationId // Ensure same organization
       };
-      
+
       // Add date range filter
       if (startDate || endDate) {
         filter.createdAt = {};
         if (startDate) filter.createdAt.$gte = new Date(startDate);
         if (endDate) filter.createdAt.$lte = new Date(endDate);
       }
-      
+
       // Validate and sanitize pagination parameters
       const safeLimit = Math.min(parseInt(limit) || 20, 100);
       const safePage = Math.max(parseInt(page) || 1, 1);
       const skip = (safePage - 1) * safeLimit;
-      
+
       const [payments, total] = await Promise.all([
         Payment.find(filter)
           .sort({ createdAt: -1 })
@@ -642,12 +652,12 @@ router.get(
           .select('-__v'), // Exclude version field
         Payment.countDocuments(filter)
       ]);
-      
+
       // Calculate summary from ALL payments (not just current page)
       const [allPayments] = await Promise.all([
         Payment.find(filter).select('amount status')
       ]);
-      
+
       const summary = {
         totalPaid: allPayments
           .filter(p => p.status === 'paid')
@@ -662,7 +672,7 @@ router.get(
         unpaidCount: allPayments.filter(p => p.status === 'unpaid').length,
         refundedCount: allPayments.filter(p => p.status === 'refunded').length
       };
-      
+
       res.status(200).json({
         success: true,
         data: {
@@ -701,7 +711,7 @@ router.post(
       const { id } = req.params;
       const User = require('../models/User');
       const Payment = require('../models/Payment');
-      
+
       // Ensure user belongs to same organization
       if (req.targetUser.organizationId.toString() !== req.user.organizationId) {
         return res.status(403).json({
@@ -709,9 +719,9 @@ router.post(
           message: 'Cannot verify users from other organizations'
         });
       }
-      
+
       const user = req.targetUser;
-      
+
       // Check if user already has paid registration
       if (user.hasPaidRegistration) {
         return res.status(400).json({
@@ -719,42 +729,42 @@ router.post(
           message: 'Registration already verified'
         });
       }
-      
+
       const registrationPayment = await Payment.findOne({
         user: id,
         type: 'registration',
         organizationId: req.user.organizationId
       });
-      
+
       if (!registrationPayment) {
         return res.status(404).json({
           success: false,
           message: 'Registration payment record not found'
         });
       }
-      
+
       if (registrationPayment.status === 'paid') {
         return res.status(400).json({
           success: false,
           message: 'Registration payment already marked as paid'
         });
       }
-      
+
       // Manually verify registration with audit trail
       registrationPayment.status = 'paid';
       registrationPayment.paidAt = new Date();
       registrationPayment.verifiedBy = req.user.id;
       registrationPayment.verificationMethod = 'manual_admin';
       await registrationPayment.save();
-      
+
       user.hasPaidRegistration = true;
       user.registrationVerifiedAt = new Date();
       user.registrationVerifiedBy = req.user.id;
       await user.save();
-      
+
       // Log the manual verification
       console.log(`Admin ${req.user.email} manually verified registration for user ${user.email}`);
-      
+
       res.status(200).json({
         success: true,
         message: 'Registration verified successfully',
@@ -796,13 +806,13 @@ router.get(
     try {
       const User = require('../models/User');
       const Payment = require('../models/Payment');
-      
+
       // Add organization scoping
-      const organizationFilter = { 
+      const organizationFilter = {
         role: 'member',
-        organizationId: req.user.organizationId 
+        organizationId: req.user.organizationId
       };
-      
+
       // Add optional date filter
       const { fromDate, toDate } = req.query;
       if (fromDate || toDate) {
@@ -810,19 +820,19 @@ router.get(
         if (fromDate) organizationFilter.createdAt.$gte = new Date(fromDate);
         if (toDate) organizationFilter.createdAt.$lte = new Date(toDate);
       }
-      
+
       const users = await User.find(organizationFilter)
         .select('name email createdAt hasPaidRegistration')
         .sort({ createdAt: -1 })
         .limit(10000); // Limit export size for performance
-      
+
       if (users.length === 0) {
         return res.status(404).json({
           success: false,
           message: 'No members found to export'
         });
       }
-      
+
       // Get payment information with organization scoping
       const usersWithPayment = await Promise.all(
         users.map(async (user) => {
@@ -831,16 +841,16 @@ router.get(
             type: 'registration',
             organizationId: req.user.organizationId
           }).select('status amount paidAt');
-          
+
           // Get total payments
           const allPayments = await Payment.find({
             user: user._id,
             organizationId: req.user.organizationId,
             status: 'paid'
           }).select('amount');
-          
+
           const totalPaid = allPayments.reduce((sum, p) => sum + (p.amount || 0), 0);
-          
+
           return {
             name: user.name,
             email: user.email,
@@ -854,7 +864,7 @@ router.get(
           };
         })
       );
-      
+
       // Consider using CSV library for large exports
       // For now, return JSON with export metadata
       res.status(200).json({
