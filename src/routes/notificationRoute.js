@@ -4,25 +4,33 @@ const { protect } = require('../middleware/auth');
 
 // Get notifications
 router.get('/', protect, async (req, res) => {
-    const notifications = await Notification.find({
-        organizationId: req.user.organizationId,
-        $or: [
-            { userId: req.user.id },
-            { userId: null } // broadcast
-        ]
-    }).sort({ createdAt: -1 }).limit(50);
+    try {
+        const limit = parseInt(req.query.limit) || 50;
 
-    const unreadCount = await Notification.countDocuments({
-        organizationId: req.user.organizationId,
-        isRead: false,
-        $or: [{ userId: req.user.id }, { userId: null }]
-    });
+        const notifications = await Notification.find({
+            organizationId: req.user.organizationId,
+            $or: [
+                { userId: req.user.id },
+                { userId: null }
+            ]
+        })
+            .sort({ createdAt: -1 })
+            .limit(limit);
 
-    res.json({
-        success: true,
-        data: notifications,
-        unreadCount
-    });
+        const unreadCount = await Notification.countDocuments({
+            organizationId: req.user.organizationId,
+            isRead: false,
+            $or: [{ userId: req.user.id }, { userId: null }]
+        });
+
+        res.json({
+            success: true,
+            data: notifications,
+            unreadCount
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
 });
 
 // Mark one as read
