@@ -4,16 +4,19 @@ const Payment = require('../models/Payment');
 const Organization = require('../models/Organization'); // 🆕
 const jwt = require('jsonwebtoken');
 const { validationResult } = require('express-validator');
+const { addToEmailQueue } = require('../services/emailQueue');
+const { sendEmailViaBrevo } = require('../services/emailServiceBrevo');
+const { sendOrganizationWelcomeEmail } = require('../services/emailService');
 const mongoose = require('mongoose');
 // Generate JWT Token (now includes organizationId)
 const generateToken = (user) => {
   return jwt.sign(
-    { 
-      id: user._id, 
+    {
+      id: user._id,
       organizationId: user.organizationId,  // critical for multi‑tenancy
-      role: user.role 
-    }, 
-    process.env.JWT_SECRET, 
+      role: user.role
+    },
+    process.env.JWT_SECRET,
     { expiresIn: process.env.JWT_EXPIRE }
   );
 };
@@ -96,6 +99,58 @@ exports.register = async (req, res, next) => {
         organizationId: targetOrgId   // 🆕
       });
     }
+    addToEmailQueue({
+      name: `member-welcome-${user.email}`,
+      maxRetries: 5,
+      task: async () => {
+        const loginUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/login`;
+
+        const htmlContent = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="utf-8">
+        <title>Welcome to FinLight</title>
+      </head>
+      <body style="font-family: Arial, sans-serif; background:#f4f4f4; padding:20px;">
+        <div style="max-width:600px;margin:auto;background:white;padding:20px;border-radius:10px;">
+          
+          <h2 style="color:#4f46e5;">Welcome to FinLight 🎉</h2>
+          
+          <p>Hello <strong>${user.name}</strong>,</p>
+
+          <p>You have been successfully registered under your organization.</p>
+
+          <div style="background:#f9fafb;padding:15px;border-radius:8px;margin:15px 0;">
+            <p><strong>Organization:</strong> ${organization.name}</p>
+            <p><strong>Role:</strong> ${user.role}</p>
+            <p><strong>Email:</strong> ${user.email}</p>
+          </div>
+
+          <p>You can now log in and access your dashboard.</p>
+
+          <a href="${loginUrl}" 
+             style="display:inline-block;padding:10px 20px;background:#4f46e5;color:white;text-decoration:none;border-radius:5px;">
+             Login to your account
+          </a>
+
+          <p style="margin-top:20px;font-size:12px;color:#777;">
+            © ${new Date().getFullYear()} FinLight
+          </p>
+
+        </div>
+      </body>
+      </html>
+    `;
+
+        await sendEmailViaBrevo(
+          user.email,
+          user.name,
+          `Welcome to FinLight - ${organization.name}`,
+          htmlContent
+        );
+      }
+    });
 
     const token = generateToken(user);
 
@@ -198,16 +253,16 @@ exports.signupWithOrg = async (req, res, next) => {
 
     // 1. Validate input
     if (!orgName || !adminName || !adminEmail || !adminPassword) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'All fields are required' 
+      return res.status(400).json({
+        success: false,
+        message: 'All fields are required'
       });
     }
-    
+
     if (adminPassword.length < 6) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Password must be at least 6 characters' 
+      return res.status(400).json({
+        success: false,
+        message: 'Password must be at least 6 characters'
       });
     }
 
@@ -217,18 +272,18 @@ exports.signupWithOrg = async (req, res, next) => {
     // 3. Check if organization slug already exists
     const existingOrg = await Organization.findOne({ slug });
     if (existingOrg) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Organization name already taken. Please choose another name.' 
+      return res.status(400).json({
+        success: false,
+        message: 'Organization name already taken. Please choose another name.'
       });
     }
 
     // 4. Check if email is already used (globally - for security)
     const existingUser = await User.findOne({ email: adminEmail });
     if (existingUser) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'This email is already registered. Please use a different email or login.' 
+      return res.status(400).json({
+        success: false,
+        message: 'This email is already registered. Please use a different email or login.'
       });
     }
 
@@ -236,11 +291,11 @@ exports.signupWithOrg = async (req, res, next) => {
     const organization = await Organization.create({
       name: orgName,
       slug,
-      paystack: { 
-        subaccountCode: '', 
-        bankName: '', 
-        accountNumber: '', 
-        percentageCharge: 0 
+      paystack: {
+        subaccountCode: '',
+        bankName: '',
+        accountNumber: '',
+        percentageCharge: 0
       },
       status: 'active',
       settings: {
@@ -269,15 +324,29 @@ exports.signupWithOrg = async (req, res, next) => {
 
     // 7. Generate JWT token
     const token = jwt.sign(
-      { 
-        id: user._id, 
-        organizationId: organization._id, 
-        role: 'admin' 
+      {
+        id: user._id,
+        organizationId: organization._id,
+        role: 'admin'
       },
       process.env.JWT_SECRET,
       { expiresIn: process.env.JWT_EXPIRE || '7d' }
     );
+    // 8. Send welcome email (non-blocking)
+    addToEmailQueue({
+      name: `welcome-${user.email}`,
+      maxRetries: 5,
+      task: async () => {
+        const loginUrl = `${process.env.FRONTEND_URL}/login`;
 
+        await sendOrganizationWelcomeEmail(
+          user.email,
+          user.name,
+          organization.name,
+          loginUrl
+        );
+      }
+    });
     // Return user with phoneNumber
     res.status(201).json({
       success: true,
@@ -300,7 +369,7 @@ exports.signupWithOrg = async (req, res, next) => {
     });
   } catch (error) {
     console.error('Signup error:', error);
-    
+
     // Handle duplicate key error
     if (error.code === 11000) {
       if (error.keyPattern?.slug) {
@@ -316,7 +385,7 @@ exports.signupWithOrg = async (req, res, next) => {
         });
       }
     }
-    
+
     next(error);
   }
 };
@@ -330,7 +399,7 @@ exports.forgotPassword = async (req, res, next) => {
   try {
     const authService = require('../services/authService');
     const resetData = await authService.requestPasswordReset(req.body.email);
-    
+
     res.status(200).json({
       success: true,
       message: 'If an account exists with this email, you will receive a password reset link.',
@@ -355,7 +424,7 @@ exports.resetPassword = async (req, res, next) => {
   try {
     const authService = require('../services/authService');
     await authService.resetPassword(req.params.token, req.body.newPassword);
-    
+
     res.status(200).json({
       success: true,
       message: 'Password reset successful. Please login with your new password.'
@@ -378,7 +447,7 @@ exports.changePassword = async (req, res, next) => {
       req.body.currentPassword,
       req.body.newPassword
     );
-    
+
     res.status(200).json({
       success: true,
       message: 'Password changed successfully. Please login again with your new password.'
@@ -397,10 +466,10 @@ exports.refreshToken = async (req, res, next) => {
   try {
     const authService = require('../services/authService');
     const result = await authService.refreshToken(req.body.token);
-    
+
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('Pragma', 'no-cache');
-    
+
     res.status(200).json({
       success: true,
       data: result
@@ -419,11 +488,11 @@ exports.logout = async (req, res, next) => {
   try {
     // Log logout event
     console.log(`User logged out: ${req.user.email} from IP ${req.ip}`);
-    
+
     // If using token blacklist, add token to blacklist here
     // const token = req.headers.authorization?.split(' ')[1];
     // await BlacklistToken.create({ token, expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000) });
-    
+
     res.status(200).json({
       success: true,
       message: 'Logged out successfully'
@@ -442,7 +511,7 @@ exports.verifyAdminPin = async (req, res, next) => {
   try {
     const { pin } = req.body;
     const adminPin = process.env.ADMIN_PIN;
-    
+
     if (!adminPin && process.env.NODE_ENV === 'production') {
       console.error('ADMIN_PIN not set in production environment');
       return res.status(500).json({
@@ -450,16 +519,16 @@ exports.verifyAdminPin = async (req, res, next) => {
         message: 'System configuration error'
       });
     }
-    
+
     const validPin = adminPin || (process.env.NODE_ENV === 'development' ? '1234' : null);
-    
+
     if (!validPin) {
       return res.status(500).json({
         success: false,
         message: 'PIN validation not configured'
       });
     }
-    
+
     // Track PIN attempts (you may want to use Redis or a database for this)
     const pinAttempts = req.session?.pinAttempts || 0;
     if (pinAttempts >= 5) {
@@ -468,11 +537,11 @@ exports.verifyAdminPin = async (req, res, next) => {
         message: 'Too many PIN attempts. Please try again later.'
       });
     }
-    
+
     if (pin === validPin) {
       console.log(`Admin PIN verified by ${req.user.email} (ID: ${req.user.id})`);
       if (req.session) req.session.pinAttempts = 0;
-      
+
       res.status(200).json({
         success: true,
         message: 'PIN verified successfully'
@@ -481,9 +550,9 @@ exports.verifyAdminPin = async (req, res, next) => {
       if (req.session) {
         req.session.pinAttempts = (req.session.pinAttempts || 0) + 1;
       }
-      
+
       console.warn(`Failed admin PIN attempt by ${req.user.email} (ID: ${req.user.id}) from IP ${req.ip}`);
-      
+
       res.status(401).json({
         success: false,
         message: 'Invalid admin PIN'
