@@ -228,7 +228,7 @@ app.use('/api/transactions', transactionRoutes);
 app.use('/api/reports', reportRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/organizations', organizationRoutes);
-app.use('/api/notification', notification)
+app.use('/api/notifications', notification)
 
 // Add this BEFORE the payment gateway routes
 app.use(express.json({
