@@ -1,6 +1,6 @@
 // backend/src/controllers/organizationController.js
 const Organization = require('../models/Organization');
-const { sendOrganizationWelcomeEmail } = require('../services/emailService'); // ADD THIS LINE
+const { sendOrganizationWelcomeEmail } = require('../services/emailService');
 const User = require('../models/User');
 const mongoose = require('mongoose');
 
@@ -8,6 +8,24 @@ const mongoose = require('mongoose');
  * Organization Controller (Super Admin only)
  */
 class OrganizationController {
+  constructor() {
+    // Bind all methods to this instance
+    this.getBankCode = this.getBankCode.bind(this);
+    this.createPaystackSubaccount = this.createPaystackSubaccount.bind(this);
+    this.updateBankDetails = this.updateBankDetails.bind(this);
+    this.getSubaccountStatus = this.getSubaccountStatus.bind(this);
+    this.getAllOrganizations = this.getAllOrganizations.bind(this);
+    this.createOrganization = this.createOrganization.bind(this);
+    this.updateOrganization = this.updateOrganization.bind(this);
+    this.deleteOrganization = this.deleteOrganization.bind(this);
+    this.updateOrganizationStatus = this.updateOrganizationStatus.bind(this);
+    this.getOrganizationStats = this.getOrganizationStats.bind(this);
+    this.getOrganizationById = this.getOrganizationById.bind(this);
+    this.getOrganizationSettings = this.getOrganizationSettings.bind(this);
+    this.updateOrganizationSettings = this.updateOrganizationSettings.bind(this);
+    this.requireSuperAdmin = this.requireSuperAdmin.bind(this);
+  }
+
   /**
    * Helper: ensure user is super_admin (handles both formats)
    */
@@ -23,6 +41,102 @@ class OrganizationController {
       });
     }
     next();
+  }
+
+  /**
+   * Helper: Get bank code from bank name using Paystack API
+   */
+  async getBankCode(bankName) {
+    try {
+      console.log('🔍 Fetching bank code for:', bankName);
+      
+      const response = await fetch('https://api.paystack.co/bank', {
+        headers: {
+          'Authorization': `Bearer ${process.env.PAYSTACK_SECRET_KEY}`
+        }
+      });
+      const data = await response.json();
+      
+      if (data.status) {
+        // Try exact match first, then partial match
+        let bank = data.data.find(b => 
+          b.name.toLowerCase() === bankName.toLowerCase()
+        );
+        
+        if (!bank) {
+          bank = data.data.find(b => 
+            b.name.toLowerCase().includes(bankName.toLowerCase()) ||
+            bankName.toLowerCase().includes(b.name.toLowerCase())
+          );
+        }
+        
+        console.log('Bank found:', bank ? bank.name : 'Not found');
+        return bank ? bank.code : null;
+      }
+      return null;
+    } catch (error) {
+      console.error('Error fetching bank code:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Helper: Create Paystack subaccount automatically
+   */
+  async createPaystackSubaccount(businessName, bankCode, accountNumber, email, phone = null) {
+    try {
+      const requestBody = {
+        business_name: businessName,
+        settlement_bank: bankCode,
+        account_number: accountNumber,
+        percentage_charge: 0,
+        description: `Subaccount for ${businessName}`,
+        primary_contact_email: email,
+        metadata: JSON.stringify({
+          platform: 'finlight',
+          created_at: new Date().toISOString()
+        })
+      };
+
+      if (phone) {
+        requestBody.primary_contact_phone = phone;
+      }
+
+      console.log('📤 Creating Paystack subaccount:', { businessName, bankCode, accountNumber });
+
+      const response = await fetch('https://api.paystack.co/subaccount', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(requestBody)
+      });
+
+      const data = await response.json();
+      console.log('📥 Paystack subaccount response:', data.status ? 'Success' : 'Failed', data.message);
+
+      if (data.status) {
+        return {
+          success: true,
+          subaccountCode: data.data.subaccount_code,
+          bankName: data.data.settlement_bank,
+          accountNumber: data.data.account_number,
+          isVerified: data.data.is_verified || false
+        };
+      } else {
+        return {
+          success: false,
+          error: data.message
+        };
+      }
+    } catch (error) {
+      console.error('Error creating subaccount:', error);
+      return {
+        success: false,
+        error: error.message
+      };
+    }
   }
 
   /**
@@ -462,7 +576,7 @@ class OrganizationController {
   }
 
   /**
-   * ✅ SIMPLIFIED FIXED VERSION - Update bank details
+   * ✅ FIXED: Update bank details and AUTO-CREATE Paystack subaccount
    * @route PUT /api/organizations/bank-details
    * @access Private/Admin
    */
@@ -512,93 +626,26 @@ class OrganizationController {
         });
       }
 
-      // ========== INLINE BANK CODE LOOKUP ==========
-      console.log('Fetching bank code for:', bankName);
-      
-      let bankCode = null;
-      try {
-        const bankResponse = await fetch('https://api.paystack.co/bank', {
-          headers: {
-            'Authorization': `Bearer ${process.env.PAYSTACK_SECRET_KEY}`
-          }
-        });
-        const bankData = await bankResponse.json();
-        
-        if (bankData.status) {
-          // Try exact match first
-          let bank = bankData.data.find(b => 
-            b.name.toLowerCase() === bankName.toLowerCase()
-          );
-          
-          // Try partial match if exact not found
-          if (!bank) {
-            bank = bankData.data.find(b => 
-              b.name.toLowerCase().includes(bankName.toLowerCase()) ||
-              bankName.toLowerCase().includes(b.name.toLowerCase())
-            );
-          }
-          
-          bankCode = bank ? bank.code : null;
-          console.log('Bank found:', bank ? bank.name : 'Not found', 'Code:', bankCode);
-        }
-      } catch (bankError) {
-        console.error('Error fetching banks:', bankError);
-      }
+      // Get bank code from bank name
+      console.log('Calling getBankCode for:', bankName);
+      const bankCode = await this.getBankCode(bankName);
+      console.log('Bank code result:', bankCode);
       
       if (!bankCode) {
         return res.status(400).json({
           success: false,
-          message: `Could not find bank code for "${bankName}". Please check the bank name.`
+          message: `Could not find bank code for "${bankName}". Please check the bank name. Valid banks: Access Bank, Zenith Bank, GTBank, etc.`
         });
       }
 
-      // ========== CREATE PAYSTACK SUBACCOUNT ==========
-      console.log('Creating Paystack subaccount...');
-      
-      let subaccountResult = null;
-      try {
-        const subaccountResponse = await fetch('https://api.paystack.co/subaccount', {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            business_name: organization.name,
-            settlement_bank: bankCode,
-            account_number: accountNumber,
-            percentage_charge: 0,
-            description: `Subaccount for ${organization.name}`,
-            primary_contact_email: admin.email,
-            metadata: JSON.stringify({
-              platform: 'finlight',
-              created_at: new Date().toISOString()
-            })
-          })
-        });
-        
-        const subaccountData = await subaccountResponse.json();
-        console.log('Subaccount response:', subaccountData.status ? 'Success' : 'Failed');
-        
-        if (subaccountData.status) {
-          subaccountResult = {
-            success: true,
-            subaccountCode: subaccountData.data.subaccount_code,
-            isVerified: subaccountData.data.is_verified || false
-          };
-        } else {
-          subaccountResult = {
-            success: false,
-            error: subaccountData.message
-          };
-        }
-      } catch (subError) {
-        console.error('Error creating subaccount:', subError);
-        subaccountResult = {
-          success: false,
-          error: subError.message
-        };
-      }
+      // Create Paystack subaccount
+      const subaccountResult = await this.createPaystackSubaccount(
+        organization.name,
+        bankCode,
+        accountNumber,
+        admin.email,
+        admin.phone || null
+      );
 
       if (!subaccountResult.success) {
         return res.status(400).json({
@@ -616,7 +663,7 @@ class OrganizationController {
         percentageCharge: 0,
         subaccountStatus: 'active',
         subaccountCreatedAt: new Date(),
-        subaccountVerified: subaccountResult.isVerified || false
+        subaccountVerified: subaccountResult.isVerified
       };
       organization.updatedAt = new Date();
       
@@ -631,7 +678,7 @@ class OrganizationController {
           bankName: bankName,
           accountNumber: accountNumber,
           accountName: accountName || organization.name,
-          isVerified: subaccountResult.isVerified || false,
+          isVerified: subaccountResult.isVerified,
           subaccountStatus: 'active'
         },
         message: 'Bank details updated and Paystack subaccount created successfully!'
@@ -648,7 +695,7 @@ class OrganizationController {
   }
 
   /**
-   * Get subaccount status
+   * ✅ NEW: Get subaccount status
    * @route GET /api/organizations/subaccount/status
    * @access Private/Admin
    */
@@ -679,6 +726,50 @@ class OrganizationController {
     } catch (error) {
       console.error('Error fetching subaccount status:', error);
       next(error);
+    }
+  }
+
+  /**
+   * Get single organization by ID (Super Admin)
+   * @route GET /api/admin/organizations/:id
+   */
+  async getOrganizationById(req, res, next) {
+    try {
+      const { id } = req.params;
+      
+      const organization = await Organization.findById(id);
+      
+      if (!organization) {
+        return res.status(404).json({ 
+          success: false, 
+          message: 'Organization not found' 
+        });
+      }
+      
+      const admins = await User.find({ 
+        organizationId: id, 
+        role: 'admin' 
+      }).select('name email');
+      
+      const memberCount = await User.countDocuments({ 
+        organizationId: id, 
+        role: 'member' 
+      });
+      
+      res.status(200).json({
+        success: true,
+        data: {
+          ...organization.toObject(),
+          admins,
+          memberCount
+        }
+      });
+    } catch (error) {
+      console.error('Error fetching organization:', error);
+      res.status(500).json({ 
+        success: false, 
+        message: error.message || 'Failed to fetch organization' 
+      });
     }
   }
 }
