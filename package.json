@@ -12,6 +12,7 @@
         "@obipascal/paystack-sdk": "^1.2.7",
         "@tanstack/react-query": "^5.100.11",
         "@tanstack/react-query-devtools": "^5.100.11",
+        "africastalking": "^0.7.9",
         "axios": "^1.5.0",
         "bcryptjs": "^2.4.3",
         "compression": "^1.8.1",

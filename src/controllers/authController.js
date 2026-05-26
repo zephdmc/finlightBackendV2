@@ -28,7 +28,7 @@ exports.register = async (req, res, next) => {
       return res.status(400).json({ errors: errors.array() });
     }
 
-    const { name, email, password, role, organizationId } = req.body;
+    const { name, email, phoneNumber, password, role, organizationId } = req.body; // Added phoneNumber
 
     // Determine organizationId: 
     // - If caller is super admin, they can specify any organizationId.
@@ -76,10 +76,11 @@ exports.register = async (req, res, next) => {
       }
     }
 
-    // Create user with organizationId
+    // Create user with organizationId and phoneNumber
     const user = await User.create({
       name,
       email,
+      phoneNumber: phoneNumber || '', // Added phoneNumber
       password,
       role: role || 'member',
       organizationId: targetOrgId
@@ -98,6 +99,7 @@ exports.register = async (req, res, next) => {
 
     const token = generateToken(user);
 
+    // Return user with phoneNumber
     res.status(201).json({
       success: true,
       token,
@@ -105,6 +107,7 @@ exports.register = async (req, res, next) => {
         id: user._id,
         name: user.name,
         email: user.email,
+        phoneNumber: user.phoneNumber || '', // Added phoneNumber
         role: user.role,
         organizationId: user.organizationId,
         hasPaidRegistration: user.hasPaidRegistration
@@ -164,6 +167,7 @@ exports.login = async (req, res, next) => {
 
     const token = generateToken(user);
 
+    // Return user with phoneNumber
     res.status(200).json({
       success: true,
       token,
@@ -171,6 +175,7 @@ exports.login = async (req, res, next) => {
         id: user._id,
         name: user.name,
         email: user.email,
+        phoneNumber: user.phoneNumber || '', // Added phoneNumber
         role: user.role,
         organizationId: user.organizationId,
         hasPaidRegistration: user.hasPaidRegistration
@@ -247,7 +252,7 @@ exports.signupWithOrg = async (req, res, next) => {
       updatedAt: new Date()
     });
 
-    // 6. Create the admin user
+    // 6. Create the admin user (no phoneNumber for admin signup)
     const user = await User.create({
       name: adminName,
       email: adminEmail,
@@ -257,6 +262,7 @@ exports.signupWithOrg = async (req, res, next) => {
       hasPaidRegistration: true,
       hasCompletedRegistration: true,
       isActive: true,
+      phoneNumber: '', // Added phoneNumber field
       createdAt: new Date(),
       updatedAt: new Date()
     });
@@ -272,6 +278,7 @@ exports.signupWithOrg = async (req, res, next) => {
       { expiresIn: process.env.JWT_EXPIRE || '7d' }
     );
 
+    // Return user with phoneNumber
     res.status(201).json({
       success: true,
       token,
@@ -279,6 +286,7 @@ exports.signupWithOrg = async (req, res, next) => {
         id: user._id,
         name: user.name,
         email: user.email,
+        phoneNumber: user.phoneNumber || '', // Added phoneNumber
         role: user.role,
         organizationId: organization._id,
         hasPaidRegistration: true
@@ -312,10 +320,6 @@ exports.signupWithOrg = async (req, res, next) => {
     next(error);
   }
 };
-
-
-
-// Add to your authController.js
 
 /**
  * @desc    Request password reset
@@ -531,6 +535,7 @@ exports.getMe = async (req, res, next) => {
         id: user._id,
         name: user.name,
         email: user.email,
+        phoneNumber: user.phoneNumber || '', // Added phoneNumber
         role: user.role,
         organizationId: user.organizationId,
         hasPaidRegistration: user.hasPaidRegistration

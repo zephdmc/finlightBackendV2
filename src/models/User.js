@@ -15,6 +15,13 @@ const userSchema = new mongoose.Schema({
     trim: true,
     match: [/^\w+([\.-]?\w+)*@\w+([\.-]?\w+)*(\.\w{2,3})+$/, 'Please provide a valid email']
   },
+  phoneNumber: {
+    type: String,
+    required: false,
+    trim: true,
+    match: [/^(\+234|0)[7-9][0-9]{9}$/, 'Please enter a valid Nigerian phone number (e.g., 08012345678 or +2348012345678)'],
+    default: ''
+  },
   password: {
     type: String,
     required: [true, 'Password is required'],
@@ -72,6 +79,7 @@ userSchema.index({ email: 1, organizationId: 1 }, {
 userSchema.index({ organizationId: 1 });
 userSchema.index({ role: 1 });
 userSchema.index({ createdAt: -1 });
+userSchema.index({ phoneNumber: 1 }); // Added index for phone number lookups
 
 // Update updatedAt timestamp on save
 userSchema.pre('save', function(next) {

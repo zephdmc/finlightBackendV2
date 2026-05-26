@@ -335,7 +335,6 @@ exports.getUnpaidMembersByType = async (req, res, next) => {
     next(error);
   }
 };
-
 /**
  * @desc    Create new payment type (scoped to organization)
  */
@@ -385,7 +384,7 @@ exports.createPaymentType = async (req, res, next) => {
       amount: req.body.amount,
       is_mandatory: req.body.is_mandatory || false,
       frequency: req.body.frequency || 'one-time',
-      organizationId  // 🆕 tenant assignment
+      organizationId
     };
 
     // Only add duration fields for recurring payments
@@ -398,10 +397,82 @@ exports.createPaymentType = async (req, res, next) => {
 
     const paymentType = await PaymentType.create(paymentTypeData);
 
+    // Get member count for preview
+    const User = require('../models/User');
+    const Organization = require('../models/Organization');
+    
+    const organization = await Organization.findById(organizationId);
+    const organizationName = organization ? organization.name : 'your organization';
+    
+    const memberCount = await User.countDocuments({
+      organizationId,
+      role: 'member',
+      isActive: true,
+      phoneNumber: { $ne: null, $ne: '' }
+    });
+
+    // Format amount for preview
+    const amountFormatted = new Intl.NumberFormat('en-NG', {
+      style: 'currency',
+      currency: 'NGN',
+      minimumFractionDigits: 0
+    }).format(paymentType.amount);
+
+    // Create SMS preview
+    const smsPreview = `🔔 NEW PAYMENT: ${organizationName}\n\n` +
+      `Dear [Member Name],\n` +
+      `A new ${paymentType.is_mandatory ? 'MANDATORY' : 'optional'} payment has been created.\n\n` +
+      `📌 ${paymentType.name}\n` +
+      `💰 Amount: ${amountFormatted}\n` +
+      `📅 Frequency: ${paymentType.frequency === 'one-time' ? 'one-time' : paymentType.frequency}\n` +
+      `${paymentType.description ? `📝 ${paymentType.description}\n` : ''}\n` +
+      `Please log in to make your payment:\n` +
+      `${process.env.FRONTEND_URL || 'https://finlightv2.web.app'}/login\n\n` +
+      `- FinLight Team`;
+
+    // Start SMS notifications in the background
+    (async () => {
+      try {
+        const { sendBulkPaymentNotification } = require('../services/smsService');
+        
+        const members = await User.find(
+          { 
+            organizationId, 
+            role: 'member',
+            isActive: true,
+            phoneNumber: { $ne: null, $ne: '' }
+          },
+          { name: 1, phoneNumber: 1, email: 1 }
+        );
+        
+        if (members.length > 0) {
+          console.log(`📱 Starting SMS notifications for ${members.length} members`);
+          
+          const onProgress = (progress) => {
+            console.log(`📱 SMS Progress: ${progress.sent}/${progress.total} sent`);
+          };
+          
+          await sendBulkPaymentNotification(members, paymentType, organizationName, onProgress);
+          console.log(`📱 SMS notifications completed for payment type: ${paymentType.name}`);
+        }
+      } catch (smsError) {
+        console.error('❌ Error sending SMS notifications:', smsError.message);
+      }
+    })();
+
+    // Send response with preview
     res.status(201).json({
       success: true,
-      data: paymentType,
-      message: 'Payment type created successfully'
+      data: {
+        paymentType,
+        smsNotification: {
+          status: 'processing',
+          totalRecipients: memberCount,
+          message: `SMS notifications are being sent to ${memberCount} members in the background.`,
+          preview: smsPreview
+        }
+      },
+      message: `Payment type "${paymentType.name}" created successfully. SMS notifications are being processed.`
     });
   } catch (error) {
     console.error('Create payment type error:', error);

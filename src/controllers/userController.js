@@ -42,121 +42,123 @@ class UserController {
    * @route GET /api/users
    * @access Private
    */
-  // backend/src/controllers/UserController.js - Simplified getAllUsers method
+  async getAllUsers(req, res, next) {
+    try {
+      const userRole = req.user.role;
+      const { page = 1, limit = 20, role, search } = req.query;
 
-async getAllUsers(req, res, next) {
-  try {
-    const userRole = req.user.role;
-    const { page = 1, limit = 20, role, search } = req.query;
+      console.log('=== getAllUsers Debug ===');
+      console.log('User Role:', userRole);
+      console.log('OrganizationId:', req.user.organizationId);
+      console.log('Query params:', { page, limit, role, search });
 
-    console.log('=== getAllUsers Debug ===');
-    console.log('User Role:', userRole);
-    console.log('OrganizationId:', req.user.organizationId);
-    console.log('Query params:', { page, limit, role, search });
+      let query = {};
 
-    let query = {};
-
-    // Super admin sees all users
-    if (userRole === 'super-admin' || userRole === 'super_admin') {
-      console.log('Super admin - no organization filter');
-      if (role) query.role = role;
-    } 
-    // Regular admin sees only their organization's users
-    else {
-      const organizationId = req.user.organizationId;
-      
-      if (!organizationId) {
-        console.error('No organizationId found for admin user');
-        return res.status(400).json({
-          success: false,
-          message: 'Organization ID not found for this user'
-        });
+      // Super admin sees all users
+      if (userRole === 'super-admin' || userRole === 'super_admin') {
+        console.log('Super admin - no organization filter');
+        if (role) query.role = role;
+      } 
+      // Regular admin sees only their organization's users
+      else {
+        const organizationId = req.user.organizationId;
+        
+        if (!organizationId) {
+          console.error('No organizationId found for admin user');
+          return res.status(400).json({
+            success: false,
+            message: 'Organization ID not found for this user'
+          });
+        }
+        
+        query.organizationId = organizationId;
+        console.log('Admin - filtering by organization:', organizationId.toString());
+        
+        // If not admin role (like member), only show members
+        if (userRole !== 'admin') {
+          query.role = 'member';
+        } else if (role) {
+          query.role = role;
+        }
       }
-      
-      query.organizationId = organizationId;
-      console.log('Admin - filtering by organization:', organizationId.toString());
-      
-      // If not admin role (like member), only show members
-      if (userRole !== 'admin') {
-        query.role = 'member';
-      } else if (role) {
-        query.role = role;
+
+      // Add search filter
+      if (search && search.trim()) {
+        query.$or = [
+          { name: { $regex: search, $options: 'i' } },
+          { email: { $regex: search, $options: 'i' } },
+          { phoneNumber: { $regex: search, $options: 'i' } } // Added phoneNumber search
+        ];
+        console.log('Search query:', search);
       }
-    }
 
-    // Add search filter
-    if (search && search.trim()) {
-      query.$or = [
-        { name: { $regex: search, $options: 'i' } },
-        { email: { $regex: search, $options: 'i' } }
-      ];
-      console.log('Search query:', search);
-    }
+      console.log('Final query:', JSON.stringify(query, null, 2));
 
-    console.log('Final query:', JSON.stringify(query, null, 2));
+      const skip = (parseInt(page) - 1) * parseInt(limit);
+      const limitNum = parseInt(limit);
 
-    const skip = (parseInt(page) - 1) * parseInt(limit);
-    const limitNum = parseInt(limit);
+      // Execute queries
+      const [users, total] = await Promise.all([
+        User.find(query)
+          .select('-password')
+          .sort({ createdAt: -1 })
+          .skip(skip)
+          .limit(limitNum)
+          .lean(),
+        User.countDocuments(query)
+      ]);
 
-    // Execute queries
-    const [users, total] = await Promise.all([
-      User.find(query)
-        .select('-password')
-        .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(limitNum)
-        .lean(), // Use lean() for better performance
-      User.countDocuments(query)
-    ]);
+      console.log(`Found ${users.length} users out of ${total} total`);
 
-    console.log(`Found ${users.length} users out of ${total} total`);
-
-    // Get payment status for members (only if needed)
-    const usersWithPaymentStatus = await Promise.all(
-      users.map(async (user) => {
-        if (user.role === 'member') {
-          const paymentQuery = { user: user._id, type: 'registration' };
-          // Only filter by organization if not super admin
-          if (userRole !== 'super-admin' && userRole !== 'super_admin' && req.user.organizationId) {
-            paymentQuery.organizationId = req.user.organizationId;
+      // Get payment status for members (only if needed)
+      const usersWithPaymentStatus = await Promise.all(
+        users.map(async (user) => {
+          if (user.role === 'member') {
+            const paymentQuery = { user: user._id, type: 'registration' };
+            if (userRole !== 'super-admin' && userRole !== 'super_admin' && req.user.organizationId) {
+              paymentQuery.organizationId = req.user.organizationId;
+            }
+            const registrationPayment = await Payment.findOne(paymentQuery).lean();
+            
+            return {
+              ...user,
+              phoneNumber: user.phoneNumber || '', // Added phoneNumber
+              registrationStatus: registrationPayment?.status || 'unpaid',
+              registrationAmount: registrationPayment?.amount || 500,
+              registrationPaidAt: registrationPayment?.paidAt || null
+            };
           }
-          const registrationPayment = await Payment.findOne(paymentQuery).lean();
-          
           return {
             ...user,
-            registrationStatus: registrationPayment?.status || 'unpaid',
-            registrationAmount: registrationPayment?.amount || 500,
-            registrationPaidAt: registrationPayment?.paidAt || null
+            phoneNumber: user.phoneNumber || '' // Added phoneNumber
           };
-        }
-        return user;
-      })
-    );
+        })
+      );
 
-    res.status(200).json({
-      success: true,
-      data: {
-        records: usersWithPaymentStatus,
-        pagination: {
-          page: parseInt(page),
-          limit: limitNum,
-          total,
-          pages: Math.ceil(total / limitNum),
-          hasNext: skip + limitNum < total,
-          hasPrev: skip > 0
+      res.status(200).json({
+        success: true,
+        data: {
+          records: usersWithPaymentStatus,
+          pagination: {
+            page: parseInt(page),
+            limit: limitNum,
+            total,
+            pages: Math.ceil(total / limitNum),
+            hasNext: skip + limitNum < total,
+            hasPrev: skip > 0
+          }
         }
-      }
-    });
-  } catch (error) {
-    console.error('Error in getAllUsers DETAILS:', error);
-    console.error('Error stack:', error.stack);
-    res.status(500).json({
-      success: false,
-      message: error.message || 'Failed to fetch users',
-      error: process.env.NODE_ENV === 'development' ? error.stack : undefined
-    });
+      });
+    } catch (error) {
+      console.error('Error in getAllUsers DETAILS:', error);
+      console.error('Error stack:', error.stack);
+      res.status(500).json({
+        success: false,
+        message: error.message || 'Failed to fetch users',
+        error: process.env.NODE_ENV === 'development' ? error.stack : undefined
+      });
+    }
   }
-}
 
   /**
    * Get single user by ID – scoped to organization
@@ -205,10 +207,14 @@ async getAllUsers(req, res, next) {
         payments = await Payment.find(paymentQuery).sort({ createdAt: -1 });
       }
 
+      // Return user with phoneNumber
       res.status(200).json({
         success: true,
         data: {
-          user,
+          user: {
+            ...user.toObject(),
+            phoneNumber: user.phoneNumber || ''
+          },
           payments: payments.length > 0 ? payments : undefined
         }
       });
@@ -218,87 +224,121 @@ async getAllUsers(req, res, next) {
     }
   };
 
-
   /**
    * Register new member (Admin only) – scoped to organization
    * @route POST /api/users/register
    * @access Private/Admin
    */
-  /**
- * Register new member (Admin only) – scoped to organization
- * @route POST /api/users/register
- * @access Private/Admin
- */
-registerMember = async (req, res, next) => {
-  try {
-    const userRole = req.user.role;
-    
-    if (userRole === 'super-admin' || userRole === 'super_admin') {
-      return res.status(400).json({
-        success: false,
-        message: 'Super admin cannot create members directly. Please use the organization creation endpoint.'
-      });
-    }
-
-    const organizationId = this.getOrgId(req);
-    const { name, email, password, role = 'member' } = req.body;
-
-    if (!organizationId) {
-      return res.status(400).json({
-        success: false,
-        message: 'Organization ID not found for this admin user'
-      });
-    }
-
-    // Check if user exists within the same organization
-    const existingUser = await User.findOne({ email, organizationId });
-    if (existingUser) {
-      return res.status(400).json({
-        success: false,
-        message: 'User with this email already exists in your organization'
-      });
-    }
-
-    // Create user
-    const user = await User.create({
-      name,
-      email,
-      password,
-      role,
-      organizationId
-    });
-
-    // If member, create registration payment record
-    if (role === 'member') {
-      await Payment.create({
-        user: user._id,
-        name: `${name} - Registration Fee`,  // ✅ FIXED: Added name field
-        type: 'registration',
-        amount: 500,
-        status: 'unpaid',
-        dueDate: new Date(),
-        description: 'Registration fee for new member',
+  registerMember = async (req, res, next) => {
+    try {
+      const userRole = req.user.role;
+      
+      if (userRole === 'super-admin' || userRole === 'super_admin') {
+        return res.status(400).json({
+          success: false,
+          message: 'Super admin cannot create members directly. Please use the organization creation endpoint.'
+        });
+      }
+  
+      const organizationId = this.getOrgId(req);
+      const { name, email, phoneNumber, password, role = 'member' } = req.body;
+  
+      if (!organizationId) {
+        return res.status(400).json({
+          success: false,
+          message: 'Organization ID not found for this admin user'
+        });
+      }
+  
+      // Check if user exists within the same organization
+      const existingUser = await User.findOne({ email, organizationId });
+      if (existingUser) {
+        return res.status(400).json({
+          success: false,
+          message: 'User with this email already exists in your organization'
+        });
+      }
+  
+      // Create user with phoneNumber
+      const user = await User.create({
+        name,
+        email,
+        phoneNumber: phoneNumber || '',
+        password,
+        role,
         organizationId
       });
-    }
-
-    res.status(201).json({
-      success: true,
-      data: {
-        user: {
-          id: user._id,
-          name: user.name,
-          email: user.email,
-          role: user.role
+  
+      // If member, create registration payment record
+      if (role === 'member') {
+        await Payment.create({
+          user: user._id,
+          name: `${name} - Registration Fee`,
+          type: 'registration',
+          amount: 500,
+          status: 'unpaid',
+          dueDate: new Date(),
+          description: 'Registration fee for new member',
+          organizationId
+        });
+      }
+  
+      // 📱 Send SMS with login credentials if phone number provided
+      let smsSent = false;
+      if (phoneNumber) {
+        try {
+          // Import SMS service
+          const { sendMemberCredentials } = require('../services/smsService');
+          
+          // Get organization name for the message
+          const Organization = require('../models/Organization');
+          const organization = await Organization.findById(organizationId);
+          const organizationName = organization ? organization.name : 'your organization';
+          
+          // Send SMS
+          smsSent = await sendMemberCredentials({
+            name: name,
+            phoneNumber: phoneNumber,
+            email: email,
+            password: password, // Plain password for SMS (user will change it)
+            organizationName: organizationName
+          });
+          
+          if (smsSent) {
+            console.log(`📱 SMS sent successfully to ${phoneNumber} for member ${email}`);
+          } else {
+            console.log(`⚠️ SMS failed to send to ${phoneNumber}`);
+          }
+        } catch (smsError) {
+          console.error('❌ SMS error:', smsError.message);
+          // Don't fail the registration if SMS fails
         }
-      },
-      message: 'Member registered successfully'
-    });
-  } catch (error) {
-    console.error('Registration error:', error);
-    next(error);
-  }
-};
+      }
+  
+      // Return user with phoneNumber and SMS status
+      res.status(201).json({
+        success: true,
+        data: {
+          user: {
+            id: user._id,
+            name: user.name,
+            email: user.email,
+            phoneNumber: user.phoneNumber || '',
+            role: user.role,
+            smsSent: smsSent // Optional: include SMS status in response
+          }
+        },
+        message: phoneNumber 
+          ? (smsSent 
+              ? 'Member registered successfully. Login credentials sent via SMS.' 
+              : 'Member registered successfully. SMS delivery failed. Please check the phone number.')
+          : 'Member registered successfully. No phone number provided for SMS.'
+      });
+    } catch (error) {
+      console.error('Registration error:', error);
+      next(error);
+    }
+  };
 
   /**
    * Update user profile – scoped to organization
@@ -308,7 +348,7 @@ registerMember = async (req, res, next) => {
   async updateUser(req, res, next) {
     try {
       const { id } = req.params;
-      const { name, email, password, role } = req.body;
+      const { name, email, phoneNumber, password, role } = req.body; // Added phoneNumber
       const userRole = req.user.role;
 
       let user;
@@ -341,6 +381,7 @@ registerMember = async (req, res, next) => {
       }
 
       if (name) user.name = name;
+      if (phoneNumber) user.phoneNumber = phoneNumber; // Added phoneNumber update
       if (email && (userRole === 'admin' || userRole === 'super-admin' || userRole === 'super_admin')) user.email = email;
       if (role && (userRole === 'admin' || userRole === 'super-admin' || userRole === 'super_admin')) user.role = role;
       if (password) user.password = password;
@@ -353,6 +394,7 @@ registerMember = async (req, res, next) => {
           id: user._id,
           name: user.name,
           email: user.email,
+          phoneNumber: user.phoneNumber || '', // Added phoneNumber
           role: user.role
         },
         message: 'User updated successfully'
@@ -511,7 +553,7 @@ registerMember = async (req, res, next) => {
 
       for (const memberData of members) {
         try {
-          const { name, email, password = 'default123' } = memberData;
+          const { name, email, phoneNumber, password = 'default123' } = memberData; // Added phoneNumber
 
           const existingUser = await User.findOne({ email, organizationId });
           if (existingUser) {
@@ -522,6 +564,7 @@ registerMember = async (req, res, next) => {
           const user = await User.create({
             name,
             email,
+            phoneNumber: phoneNumber || '', // Added phoneNumber
             password,
             role: 'member',
             organizationId
@@ -536,7 +579,7 @@ registerMember = async (req, res, next) => {
             organizationId
           });
 
-          results.successful.push({ id: user._id, name, email });
+          results.successful.push({ id: user._id, name, email, phoneNumber: phoneNumber || '' });
         } catch (error) {
           results.failed.push({ email: memberData.email, reason: error.message });
         }
