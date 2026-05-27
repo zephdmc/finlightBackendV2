@@ -3,6 +3,9 @@ const User = require('../models/User');
 const Payment = require('../models/Payment');
 const bcrypt = require('bcryptjs');
 const mongoose = require('mongoose');
+const { addToEmailQueue } = require('../services/emailQueue');
+const { sendEmailViaBrevo } = require('../services/emailServiceBrevo');
+const { sendMemberWelcomeEmail } = require('../services/emailServiceBrevo');
 
 /**
  * User Controller - Handles all user management operations
@@ -58,11 +61,11 @@ class UserController {
       if (userRole === 'super-admin' || userRole === 'super_admin') {
         console.log('Super admin - no organization filter');
         if (role) query.role = role;
-      } 
+      }
       // Regular admin sees only their organization's users
       else {
         const organizationId = req.user.organizationId;
-        
+
         if (!organizationId) {
           console.error('No organizationId found for admin user');
           return res.status(400).json({
@@ -70,10 +73,10 @@ class UserController {
             message: 'Organization ID not found for this user'
           });
         }
-        
+
         query.organizationId = organizationId;
         console.log('Admin - filtering by organization:', organizationId.toString());
-        
+
         // If not admin role (like member), only show members
         if (userRole !== 'admin') {
           query.role = 'member';
@@ -119,7 +122,7 @@ class UserController {
               paymentQuery.organizationId = req.user.organizationId;
             }
             const registrationPayment = await Payment.findOne(paymentQuery).lean();
-            
+
             return {
               ...user,
               phoneNumber: user.phoneNumber || '', // Added phoneNumber
@@ -232,24 +235,24 @@ class UserController {
   registerMember = async (req, res, next) => {
     try {
       const userRole = req.user.role;
-      
+
       if (userRole === 'super-admin' || userRole === 'super_admin') {
         return res.status(400).json({
           success: false,
           message: 'Super admin cannot create members directly. Please use the organization creation endpoint.'
         });
       }
-  
+
       const organizationId = this.getOrgId(req);
       const { name, email, phoneNumber, password, role = 'member' } = req.body;
-  
+
       if (!organizationId) {
         return res.status(400).json({
           success: false,
           message: 'Organization ID not found for this admin user'
         });
       }
-  
+
       // Check if user exists within the same organization
       const existingUser = await User.findOne({ email, organizationId });
       if (existingUser) {
@@ -258,7 +261,7 @@ class UserController {
           message: 'User with this email already exists in your organization'
         });
       }
-  
+
       // Create user with phoneNumber
       const user = await User.create({
         name,
@@ -268,7 +271,7 @@ class UserController {
         role,
         organizationId
       });
-  
+
       // If member, create registration payment record
       if (role === 'member') {
         await Payment.create({
@@ -282,39 +285,22 @@ class UserController {
           organizationId
         });
       }
-  
-      // 📱 Send SMS with login credentials if phone number provided
-      let smsSent = false;
-      if (phoneNumber) {
-        try {
-          // Import SMS service
-          const { sendMemberCredentials } = require('../services/smsService');
-          
-          // Get organization name for the message
-          const Organization = require('../models/Organization');
-          const organization = await Organization.findById(organizationId);
-          const organizationName = organization ? organization.name : 'your organization';
-          
-          // Send SMS
-          smsSent = await sendMemberCredentials({
-            name: name,
-            phoneNumber: phoneNumber,
-            email: email,
-            password: password, // Plain password for SMS (user will change it)
-            organizationName: organizationName
-          });
-          
-          if (smsSent) {
-            console.log(`📱 SMS sent successfully to ${phoneNumber} for member ${email}`);
-          } else {
-            console.log(`⚠️ SMS failed to send to ${phoneNumber}`);
-          }
-        } catch (smsError) {
-          console.error('❌ SMS error:', smsError.message);
-          // Don't fail the registration if SMS fails
+      // ✅ QUEUE the email instead of sending directly
+      const loginUrl = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/login`;
+      addToEmailQueue({
+        name: `member-welcome-${user._id}-${Date.now()}`,
+        maxRetries: 5,
+        retryDelay: 2000,
+        task: async () => {
+          await sendMemberWelcomeEmail(user.email, user.name, organization.name, loginUrl, password);
+          console.log(`✅ Welcome email sent to ${user.email}`);
         }
-      }
-  
+      });
+
+      console.log(`📧 Member welcome email queued for ${user.email}`);
+
+
+
       // Return user with phoneNumber and SMS status
       res.status(201).json({
         success: true,
@@ -325,13 +311,13 @@ class UserController {
             email: user.email,
             phoneNumber: user.phoneNumber || '',
             role: user.role,
-            smsSent: smsSent // Optional: include SMS status in response
+            organizationId: user.organizationId
           }
         },
-        message: phoneNumber 
-          ? (smsSent 
-              ? 'Member registered successfully. Login credentials sent via SMS.' 
-              : 'Member registered successfully. SMS delivery failed. Please check the phone number.')
+        message: phoneNumber
+          ? (smsSent
+            ? 'Member registered successfully. Login credentials sent via SMS.'
+            : 'Member registered successfully. SMS delivery failed. Please check the phone number.')
           : 'Member registered successfully. No phone number provided for SMS.'
       });
     } catch (error) {
@@ -352,7 +338,7 @@ class UserController {
       const userRole = req.user.role;
 
       let user;
-      
+
       if (userRole === 'super-admin' || userRole === 'super_admin') {
         user = await User.findById(id);
       } else {
@@ -423,7 +409,7 @@ class UserController {
       }
 
       let user;
-      
+
       if (userRole === 'super-admin' || userRole === 'super_admin') {
         user = await User.findById(id);
       } else {
@@ -474,7 +460,7 @@ class UserController {
       const userRole = req.user.role;
       let statsQuery = {};
       let paymentMatch = { type: 'registration' };
-      
+
       if (userRole === 'super-admin' || userRole === 'super_admin') {
         statsQuery = {};
         paymentMatch = { type: 'registration' };
@@ -531,7 +517,7 @@ class UserController {
   async bulkImportMembers(req, res, next) {
     try {
       const userRole = req.user.role;
-      
+
       if (userRole === 'super-admin' || userRole === 'super_admin') {
         return res.status(400).json({
           success: false,
@@ -615,7 +601,7 @@ class UserController {
       }
 
       let user;
-      
+
       if (userRole === 'super-admin' || userRole === 'super_admin') {
         user = await User.findById(id);
       } else {
@@ -660,7 +646,7 @@ class UserController {
       const userRole = req.user.role;
 
       let user;
-      
+
       if (userRole === 'super-admin' || userRole === 'super_admin') {
         user = await User.findById(id);
       } else {
