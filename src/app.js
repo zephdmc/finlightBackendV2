@@ -41,13 +41,33 @@ app.use(helmet({
 }));
 
 // 2. CORS with enhanced security
+// Dynamic CORS configuration for multiple origins
+const allowedOrigins = [
+  'http://localhost:5173',           // Local development
+  'http://localhost',                 // Capacitor Android (sometimes)
+  'capacitor://localhost',           // Capacitor Android (correct)
+  'https://finlightv2.web.app',      // Your deployed frontend
+  'https://finlightbackendv2.onrender.com' // Your backend itself
+];
+
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:5173',
+  origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps or curl)
+    if (!origin) return callback(null, true);
+
+    if (allowedOrigins.indexOf(origin) !== -1) {
+      callback(null, true);
+    } else {
+      console.log('Blocked origin:', origin); // For debugging
+      callback(null, true); // Still allow but log it
+      // callback(new Error('Not allowed by CORS')); // Uncomment to block
+    }
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
   exposedHeaders: ['Content-Range', 'X-Content-Range'],
-  maxAge: 86400, // 24 hours
+  maxAge: 86400,
 }));
 
 // 3. Rate Limiting - Prevent brute force attacks
