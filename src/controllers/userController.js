@@ -5,7 +5,7 @@ const bcrypt = require('bcryptjs');
 const mongoose = require('mongoose');
 const { sendMemberWelcomeEmail } = require('../services/emailServiceBrevo');
 const Organization = require('../models/Organization');
-
+const { addToEmailQueue } = require('../services/emailQueue');
 /**
  * User Controller - Handles all user management operations
  * Manages member registration, profile updates, and user listings
@@ -271,18 +271,10 @@ class UserController {
         organizationId
       });
 
-      const organization = await Organization.findById(targetOrgId);
-      if (!organization) {
-        return res.status(404).json({
-          success: false,
-          message: 'Organization not found'
-        });
-      }
 
 
-      // // Get organization name for the message
-      // const Organization = require('../models/Organization');
-      // const organization = await Organization.findById(organizationId);
+      // Get organization name for the message
+      const organization = await Organization.findById(organizationId);
       // const organizationName = organization ? organization.name : 'your organization';
       // ✅ QUEUE the email instead of sending directly
       const loginUrl = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/login`;
@@ -386,16 +378,11 @@ class UserController {
       if (password) user.password = password;
 
       await user.save();
+      // Get organization name for the message
+      const organization = await Organization.findById(user.organizationId);
+      // const organizationName = organization ? organization.name : 'your organization';
 
-      const organization = await Organization.findById(targetOrgId);
-      if (!organization) {
-        return res.status(404).json({
-          success: false,
-          message: 'Organization not found'
-        });
-      }
 
-      // ✅ QUEUE the email instead of sending directly
       const loginUrl = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/login`;
       addToEmailQueue({
         name: `member-welcome-${user._id}-${Date.now()}`,
@@ -406,8 +393,6 @@ class UserController {
           console.log(`✅ Welcome email sent to ${user.email}`);
         }
       });
-
-      console.log(`📧 Member  email queued for ${user.email}`);
 
       res.status(200).json({
         success: true,
