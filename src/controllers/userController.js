@@ -309,7 +309,6 @@ class UserController {
       // ✅ CORRECTED RESPONSE - No extra 'data' wrapper
       res.status(201).json({
         success: true,
-        token,
         user: {
           id: user._id,
           name: user.name,
