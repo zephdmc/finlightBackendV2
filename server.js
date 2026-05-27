@@ -5,7 +5,6 @@ dotenv.config();
 
 const app = require('./src/app');
 const database = require('./src/config/database');
-const { processQueue } = require('./src/services/emailQueue');
 
 const PORT = process.env.PORT || 5000;
 const NODE_ENV = process.env.NODE_ENV || 'development';
@@ -15,7 +14,6 @@ const startServer = async () => {
   try {
     // Connect to database using your database config
     await database.connect();
-    processQueue(); // ✅ START THE QUEUE PROCESSOR
     const server = app.listen(PORT, '0.0.0.0', () => {
       console.log(`🚀 Server running on port ${PORT}`);
       console.log(`🌍 Environment: ${NODE_ENV}`);
