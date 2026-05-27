@@ -8,7 +8,6 @@ const { addToEmailQueue } = require('../services/emailQueue');
 const { sendEmailViaBrevo } = require('../services/emailServiceBrevo');
 const { sendOrganizationWelcomeEmail } = require('../services/emailServiceBrevo');
 const { sendMemberWelcomeEmail } = require('../services/emailService');
-// Generate JWT Token (now includes organizationId)
 const generateToken = (user) => {
   return jwt.sign(
     {
@@ -21,10 +20,6 @@ const generateToken = (user) => {
   );
 };
 
-
-// @desc    Register user (Admin only – creates a user under a specific organization)
-// @route   POST /api/auth/register
-// @access  Private/Admin (or SuperAdmin)
 exports.register = async (req, res, next) => {
   try {
     const errors = validationResult(req);
@@ -34,12 +29,8 @@ exports.register = async (req, res, next) => {
 
     const { name, email, phoneNumber, password, role, organizationId } = req.body;
 
-    // Determine organizationId: 
-    // - If caller is super admin, they can specify any organizationId.
-    // - If caller is a regular admin, use their own organizationId.
     let targetOrgId = organizationId;
     if (req.user?.role === 'admin' && !req.user?.isSuperAdmin) {
-      // Regular admin can only create users under their own organization
       targetOrgId = req.user.organizationId;
     }
     if (!targetOrgId) {
@@ -49,7 +40,6 @@ exports.register = async (req, res, next) => {
       });
     }
 
-    // Verify organization exists
     const organization = await Organization.findById(targetOrgId);
     if (!organization) {
       return res.status(404).json({
@@ -58,7 +48,6 @@ exports.register = async (req, res, next) => {
       });
     }
 
-    // Check if user exists (email + organization unique)
     const existingUser = await User.findOne({ email, organizationId: targetOrgId });
     if (existingUser) {
       return res.status(400).json({
@@ -67,7 +56,6 @@ exports.register = async (req, res, next) => {
       });
     }
 
-    // Check member registration limit (only for member role, scoped to organization)
     if (role === 'member' || !role) {
       const memberCount = await User.countDocuments({ role: 'member', organizationId: targetOrgId });
       const MAX_MEMBERS = parseInt(process.env.MAX_MEMBERS) || 25;
@@ -80,7 +68,6 @@ exports.register = async (req, res, next) => {
       }
     }
 
-    // Create user with organizationId and phoneNumber
     const user = await User.create({
       name,
       email,
@@ -88,23 +75,25 @@ exports.register = async (req, res, next) => {
       password,
       role: role || 'member',
       organizationId: targetOrgId,
-      hasPaidRegistration: false, // Members need to pay registration fee
+      hasPaidRegistration: false,
       hasCompletedRegistration: false,
       isActive: true
     });
 
-
-    // Send welcome email WITH password
+    // ✅ QUEUE the email instead of sending directly
     const loginUrl = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/login`;
-    try {
-      await sendMemberWelcomeEmail(user.email, user.name, organization.name, loginUrl, password);
-      console.log(`✅ Welcome email sent to ${user.email} with credentials`);
-    } catch (emailError) {
-      console.error('❌ Email failed:', emailError.message);
-    }
+    addToEmailQueue({
+      name: `member-welcome-${user._id}-${Date.now()}`,
+      maxRetries: 5,
+      retryDelay: 2000,
+      task: async () => {
+        await sendMemberWelcomeEmail(user.email, user.name, organization.name, loginUrl, password);
+        console.log(`✅ Welcome email sent to ${user.email}`);
+      }
+    });
 
+    console.log(`📧 Member welcome email queued for ${user.email}`);
 
-    // If member, create registration payment record (scoped to organization)
     if (user.role === 'member') {
       await Payment.create({
         user: user._id,
@@ -117,7 +106,6 @@ exports.register = async (req, res, next) => {
 
     const token = generateToken(user);
 
-    // Return user with phoneNumber
     res.status(201).json({
       success: true,
       token,

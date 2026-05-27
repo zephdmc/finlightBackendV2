@@ -243,10 +243,10 @@ const sendPaymentTypeNotificationEmail = async (email, name, paymentType, organi
 
   const subject = isUpdate
     ? `📝 Payment Updated: ${paymentType.name} - ${formattedAmount}`
-    : `💰 New Payment Created: ${paymentType.name} - ${formattedAmount}`;
+    : ` New Payment Created: ${paymentType.name} - ${formattedAmount}`;
 
   const headerTitle = isUpdate ? 'Payment Details Updated' : 'New Payment Created';
-  const headerIcon = isUpdate ? '📝' : '💰';
+  const headerIcon = isUpdate ? '📝' : '!';
   const actionText = isUpdate ? 'View Updated Details' : 'Make Payment Now';
 
   const htmlContent = `
