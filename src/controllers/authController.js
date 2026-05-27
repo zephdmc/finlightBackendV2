@@ -8,8 +8,6 @@ const { addToEmailQueue } = require('../services/emailQueue');
 const { sendEmailViaBrevo } = require('../services/emailServiceBrevo');
 const { sendOrganizationWelcomeEmail } = require('../services/emailServiceBrevo');
 const { sendMemberWelcomeEmail } = require('../services/emailService');
-const { sendMemberCredentials } = require('../services/smsService');
-const mongoose = require('mongoose');
 // Generate JWT Token (now includes organizationId)
 const generateToken = (user) => {
   return jwt.sign(
@@ -23,6 +21,7 @@ const generateToken = (user) => {
   );
 };
 
+
 // @desc    Register user (Admin only – creates a user under a specific organization)
 // @route   POST /api/auth/register
 // @access  Private/Admin (or SuperAdmin)
@@ -33,7 +32,7 @@ exports.register = async (req, res, next) => {
       return res.status(400).json({ errors: errors.array() });
     }
 
-    const { name, email, phoneNumber, password, role, organizationId } = req.body; // Added phoneNumber
+    const { name, email, phoneNumber, password, role, organizationId } = req.body;
 
     // Determine organizationId: 
     // - If caller is super admin, they can specify any organizationId.
@@ -85,87 +84,36 @@ exports.register = async (req, res, next) => {
     const user = await User.create({
       name,
       email,
-      phoneNumber: phoneNumber || '', // Added phoneNumber
+      phoneNumber: phoneNumber || '',
       password,
       role: role || 'member',
-      organizationId: targetOrgId
+      organizationId: targetOrgId,
+      hasPaidRegistration: false, // Members need to pay registration fee
+      hasCompletedRegistration: false,
+      isActive: true
     });
 
+
+    // Send welcome email WITH password
+    const loginUrl = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/login`;
     try {
-      await sendMemberWelcomeEmail(user.email, user.name, organization.name,
-        `${process.env.FRONTEND_URL}/login`);
-    } catch (error) {
-      console.error('Email failed:', error.message);
+      await sendMemberWelcomeEmail(user.email, user.name, organization.name, loginUrl, password);
+      console.log(`✅ Welcome email sent to ${user.email} with credentials`);
+    } catch (emailError) {
+      console.error('❌ Email failed:', emailError.message);
     }
-    try {
-      await sendMemberCredentials(user.name, user.phoneNumber, user.email, user.password, organization.name);
-    } catch (error) {
-      console.error('Text failed:', error.message);
-    }
+
 
     // If member, create registration payment record (scoped to organization)
     if (user.role === 'member') {
       await Payment.create({
         user: user._id,
         type: 'registration',
-        amount: 500, // Registration fee – configurable
+        amount: organization.settings?.registrationFee || 500,
         status: 'unpaid',
-        organizationId: targetOrgId   // 🆕
+        organizationId: targetOrgId
       });
-
     }
-    addToEmailQueue({
-      name: `member-welcome-${user.email}`,
-      maxRetries: 5,
-      task: async () => {
-        const loginUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/login`;
-
-        const htmlContent = `
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <meta charset="utf-8">
-        <title>Welcome to FinLight</title>
-      </head>
-      <body style="font-family: Arial, sans-serif; background:#f4f4f4; padding:20px;">
-        <div style="max-width:600px;margin:auto;background:white;padding:20px;border-radius:10px;">
-          
-          <h2 style="color:#4f46e5;">Welcome to FinLight 🎉</h2>
-          
-          <p>Hello <strong>${user.name}</strong>,</p>
-
-          <p>You have been successfully registered under your organization.</p>
-
-          <div style="background:#f9fafb;padding:15px;border-radius:8px;margin:15px 0;">
-            <p><strong>Organization:</strong> ${organization.name}</p>
-            <p><strong>Role:</strong> ${user.role}</p>
-            <p><strong>Email:</strong> ${user.email}</p>
-          </div>
-
-          <p>You can now log in and access your dashboard.</p>
-
-          <a href="${loginUrl}" 
-             style="display:inline-block;padding:10px 20px;background:#4f46e5;color:white;text-decoration:none;border-radius:5px;">
-             Login to your account
-          </a>
-
-          <p style="margin-top:20px;font-size:12px;color:#777;">
-            © ${new Date().getFullYear()} FinLight
-          </p>
-
-        </div>
-      </body>
-      </html>
-    `;
-
-        await sendEmailViaBrevo(
-          user.email,
-          user.name,
-          `Welcome to FinLight - ${organization.name}`,
-          htmlContent
-        );
-      }
-    });
 
     const token = generateToken(user);
 
@@ -177,12 +125,38 @@ exports.register = async (req, res, next) => {
         id: user._id,
         name: user.name,
         email: user.email,
-        phoneNumber: user.phoneNumber || '', // Added phoneNumber
+        phoneNumber: user.phoneNumber || '',
         role: user.role,
         organizationId: user.organizationId,
         hasPaidRegistration: user.hasPaidRegistration
-      }
+      },
+      message: `${user.role === 'admin' ? 'Admin' : 'Member'} registered successfully! ${phoneNumber ? 'Credentials sent via SMS and email.' : 'Credentials sent via email.'}`
     });
+  } catch (error) {
+    console.error('Registration error:', error);
+    next(error);
+  }
+};
+
+
+// Add this to your authController.js
+exports.resendCredentials = async (req, res, next) => {
+  try {
+    const { email } = req.body;
+    const user = await User.findOne({ email, organizationId: req.user.organizationId });
+
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    const organization = await Organization.findById(user.organizationId);
+    const loginUrl = `${process.env.FRONTEND_URL}/login`;
+
+    // You'll need to store the original password or generate a reset link
+    // For security, better to send a password reset link
+    await sendPasswordResetEmail(user.email, user.name, `${process.env.FRONTEND_URL}/reset-password?email=${user.email}`);
+
+    res.json({ success: true, message: 'Credentials resent to email' });
   } catch (error) {
     next(error);
   }

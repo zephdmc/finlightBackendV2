@@ -3,9 +3,8 @@ const PaymentType = require('../models/PaymentType');
 const Payment = require('../models/Payment');
 const User = require('../models/User');
 const mongoose = require('mongoose');
-const { addToEmailQueue } = require('../services/emailQueue');
-const sendEmailViaBrevo = require('../services/emailServiceBrevo');
 const { notifyOrganization } = require('../services/notificationService');
+const { sendPaymentTypeNotificationEmail } = require('../services/emailService');
 
 /**
  * Helper: Get organizationId from authenticated user
@@ -13,6 +12,69 @@ const { notifyOrganization } = require('../services/notificationService');
  */
 const getOrgId = (req) => req.user.organizationId;
 
+
+/**
+ * Helper: Send payment type notification to all members
+ */
+const sendPaymentTypeNotifications = async (paymentType, organizationId, organizationName, isUpdate = false) => {
+  try {
+    // Get all active members with emails
+    const members = await User.find(
+      {
+        organizationId,
+        role: 'member',
+        isActive: true,
+        email: { $ne: null, $regex: /\S+@\S+\.\S+/, $ne: '' }
+      },
+      { name: 1, email: 1 }
+    );
+
+    if (members.length === 0) {
+      console.log('⚠️ No active members with valid emails found');
+      return { total: 0, sent: 0, failed: 0 };
+    }
+
+    console.log(`📧 Sending ${isUpdate ? 'update' : 'new'} payment type notifications to ${members.length} members`);
+
+    let sent = 0;
+    let failed = 0;
+
+    // Send emails to all members
+    for (const member of members) {
+      try {
+        const loginUrl = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/login`;
+        const paymentsUrl = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/member/payments`;
+
+        await sendPaymentTypeNotificationEmail(
+          member.email,
+          member.name,
+          paymentType,
+          organizationName,
+          loginUrl,
+          paymentsUrl,
+          isUpdate
+        );
+
+        sent++;
+        console.log(`✅ Email sent to ${member.email} (${sent}/${members.length})`);
+
+        // Small delay to avoid rate limiting
+        await new Promise(resolve => setTimeout(resolve, 100));
+
+      } catch (emailError) {
+        failed++;
+        console.error(`❌ Failed to send email to ${member.email}:`, emailError.message);
+      }
+    }
+
+    console.log(`📧 Payment type notifications completed: ${sent} sent, ${failed} failed`);
+    return { total: members.length, sent, failed };
+
+  } catch (error) {
+    console.error('❌ Error sending payment type notifications:', error);
+    return { total: 0, sent: 0, failed: 0, error: error.message };
+  }
+};
 /**
  * @desc    Get all payment types (scoped to organization)
  * @route   GET /api/payment-types
@@ -422,126 +484,18 @@ exports.createPaymentType = async (req, res, next) => {
     }).format(paymentType.amount);
 
 
+    // ✅ Send email notifications to all members in the background
+    sendPaymentTypeNotifications(paymentType, organizationId, organizationName, false)
+      .then(result => {
+        console.log(`✅ Payment type email notifications completed: ${result.sent}/${result.total} sent`);
+      })
+      .catch(error => {
+        console.error('❌ Background email notification failed:', error);
+      });
 
-    // Create SMS preview
-    const smsPreview = `🔔 NEW PAYMENT: ${organizationName}\n\n` +
-      `Dear [Member Name],\n` +
-      `A new ${paymentType.is_mandatory ? 'MANDATORY' : 'optional'} payment has been created.\n\n` +
-      `📌 ${paymentType.name}\n` +
-      `💰 Amount: ${amountFormatted}\n` +
-      `📅 Frequency: ${paymentType.frequency === 'one-time' ? 'one-time' : paymentType.frequency}\n` +
-      `${paymentType.description ? `📝 ${paymentType.description}\n` : ''}\n` +
-      `Please log in to make your payment:\n` +
-      `${process.env.FRONTEND_URL || 'https://finlightv2.web.app'}/login\n\n` +
-      `- FinLight Team`;
 
-    // Start SMS notifications in the background
-    (async () => {
-      try {
-        const { sendBulkPaymentNotification } = require('../services/smsService');
 
-        const members = await User.find(
-          {
-            organizationId,
-            role: 'member',
-            isActive: true,
-            phoneNumber: { $ne: null, $ne: '' }
-          },
-          { name: 1, phoneNumber: 1, email: 1 }
-        );
 
-        if (members.length > 0) {
-          console.log(`📱 Starting SMS notifications for ${members.length} members`);
-
-          const onProgress = (progress) => {
-            console.log(`📱 SMS Progress: ${progress.sent}/${progress.total} sent`);
-          };
-
-          await sendBulkPaymentNotification(members, paymentType, organizationName, onProgress);
-          console.log(`📱 SMS notifications completed for payment type: ${paymentType.name}`);
-        }
-      } catch (smsError) {
-        console.error('❌ Error sending SMS notifications:', smsError.message);
-      }
-    })();
-
-    (async () => {
-      try {
-        const members = await User.find(
-          {
-            organizationId,
-            role: 'member',
-            isActive: true,
-            email: { $ne: null }
-          },
-          { name: 1, email: 1 }
-        );
-
-        if (members.length === 0) return;
-
-        console.log(`📧 Starting EMAIL notifications for ${members.length} members`);
-
-        members.forEach((member) => {
-          addToEmailQueue({
-            name: `paymenttype-${paymentType._id}-${member.email}`,
-            maxRetries: 5,
-            task: async () => {
-              const loginUrl = `${process.env.FRONTEND_URL || 'https://finlightv2.web.app'}/login`;
-
-              const htmlContent = `
-            <!DOCTYPE html>
-            <html>
-            <head>
-              <meta charset="utf-8">
-              <title>New Payment Alert</title>
-            </head>
-            <body style="font-family: Arial; background:#f6f7fb; padding:20px;">
-              <div style="max-width:600px;margin:auto;background:white;padding:20px;border-radius:10px;">
-
-                <h2 style="color:#4f46e5;">🔔 New Payment Created</h2>
-
-                <p>Hello <strong>${member.name}</strong>,</p>
-
-                <p>A new payment has been created in your organization.</p>
-
-                <div style="background:#f9fafb;padding:15px;border-radius:8px;">
-                  <p><strong>Payment:</strong> ${paymentType.name}</p>
-                  <p><strong>Amount:</strong> ₦${paymentType.amount}</p>
-                  <p><strong>Type:</strong> ${paymentType.type}</p>
-                  <p><strong>Frequency:</strong> ${paymentType.frequency}</p>
-                  ${paymentType.description ? `<p><strong>Description:</strong> ${paymentType.description}</p>` : ''}
-                </div>
-
-                <p>Please log in to make payment.</p>
-
-                <a href="${loginUrl}" 
-                   style="display:inline-block;padding:10px 20px;background:#4f46e5;color:white;text-decoration:none;border-radius:5px;">
-                  Pay Now
-                </a>
-
-                <p style="font-size:12px;color:#777;margin-top:20px;">
-                  © ${new Date().getFullYear()} FinLight
-                </p>
-
-              </div>
-            </body>
-            </html>
-          `;
-
-              await sendEmailViaBrevo(
-                member.email,
-                member.name,
-                `New Payment: ${paymentType.name}`,
-                htmlContent
-              );
-            }
-          });
-        });
-
-      } catch (err) {
-        console.error('❌ Payment type email error:', err.message);
-      }
-    })();
 
     await notifyOrganization({
       organizationId,
@@ -690,6 +644,15 @@ exports.updatePaymentType = async (req, res, next) => {
         message: 'Payment type not found'
       });
     }
+    // Get organization name
+    const Organization = require('../models/Organization');
+    const organization = await Organization.findById(organizationId);
+    const organizationName = organization ? organization.name : 'your organization';
+
+    // ✅ Send update notifications to members (fire and forget)
+    sendPaymentTypeNotifications(paymentType, organizationId, organizationName, true)
+      .catch(error => console.error('Failed to send update notifications:', error));
+
 
     await notifyOrganization({
       organizationId,
