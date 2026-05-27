@@ -30,7 +30,7 @@ const addToEmailQueue = (job) => {
  * Process queue sequentially
  */
 const processQueue = async () => {
-    if (processing) return;
+    if (processing) return setImmediate(processQueue);
     processing = true;
 
     try {
