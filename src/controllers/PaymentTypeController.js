@@ -400,9 +400,7 @@ exports.getUnpaidMembersByType = async (req, res, next) => {
     next(error);
   }
 };
-/**
- * @desc    Create new payment type (scoped to organization)
- */
+
 exports.createPaymentType = async (req, res, next) => {
   try {
     const organizationId = getOrgId(req);
@@ -462,29 +460,12 @@ exports.createPaymentType = async (req, res, next) => {
 
     const paymentType = await PaymentType.create(paymentTypeData);
 
-    // Get member count for preview
-    const User = require('../models/User');
+    // Get organization name for notifications
     const Organization = require('../models/Organization');
-
     const organization = await Organization.findById(organizationId);
     const organizationName = organization ? organization.name : 'your organization';
 
-    const memberCount = await User.countDocuments({
-      organizationId,
-      role: 'member',
-      isActive: true,
-      phoneNumber: { $ne: null, $ne: '' }
-    });
-
-    // Format amount for preview
-    const amountFormatted = new Intl.NumberFormat('en-NG', {
-      style: 'currency',
-      currency: 'NGN',
-      minimumFractionDigits: 0
-    }).format(paymentType.amount);
-
-
-    // ✅ Send email notifications to all members in the background
+    // ✅ Send email notifications to all members in the background (FIRE AND FORGET)
     sendPaymentTypeNotifications(paymentType, organizationId, organizationName, false)
       .then(result => {
         console.log(`✅ Payment type email notifications completed: ${result.sent}/${result.total} sent`);
@@ -493,10 +474,7 @@ exports.createPaymentType = async (req, res, next) => {
         console.error('❌ Background email notification failed:', error);
       });
 
-
-
-
-
+    // Send organization notification
     await notifyOrganization({
       organizationId,
       title: 'New Payment Created 🔔',
@@ -507,20 +485,15 @@ exports.createPaymentType = async (req, res, next) => {
       }
     });
 
-    // Send response with preview
+    // ✅ Send response - NO smsPreview here!
     res.status(201).json({
       success: true,
       data: {
-        paymentType,
-        smsNotification: {
-          status: 'processing',
-          totalRecipients: memberCount,
-          message: `SMS notifications are being sent to ${memberCount} members in the background.`,
-          preview: smsPreview
-        }
+        paymentType
       },
-      message: `Payment type "${paymentType.name}" created successfully. SMS notifications are being processed.`
+      message: `Payment type "${paymentType.name}" created successfully.`
     });
+
   } catch (error) {
     console.error('Create payment type error:', error);
     next(error);
