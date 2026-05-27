@@ -167,8 +167,61 @@ const sendOrganizationWelcomeEmail = async (adminEmail, adminName, organizationN
 
   return await sendEmailViaBrevo(adminEmail, adminName, `Welcome to FinLight - ${organizationName}`, htmlContent);
 };
+const sendMemberWelcomeEmail = async (email, name, organizationName, loginUrl) => {
+  const htmlContent = `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <title>Welcome to FinLight</title>
+      <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+        .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+        .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; text-align: center; border-radius: 10px 10px 0 0; }
+        .content { background: #f9f9f9; padding: 30px; border-radius: 0 0 10px 10px; }
+        .button { display: inline-block; padding: 12px 30px; background: #667eea; color: white; text-decoration: none; border-radius: 5px; }
+        .footer { text-align: center; padding: 20px; font-size: 12px; color: #999; }
+      </style>
+    </head>
+    <body>
+      <div class="container">
+        <div class="header">
+          <h1>Welcome to FinLight 🎉</h1>
+        </div>
+
+        <div class="content">
+          <p>Hello <strong>${name}</strong>,</p>
+
+          <p>You have been successfully added to <strong>${organizationName}</strong>.</p>
+
+          <p>You can now log in and start using your account.</p>
+
+          <div style="text-align:center; margin: 20px 0;">
+            <a href="${loginUrl}" class="button">Login to Dashboard</a>
+          </div>
+
+          <p>If you did not expect this, please contact your organization admin.</p>
+        </div>
+
+        <div class="footer">
+          <p>© ${new Date().getFullYear()} FinLight</p>
+        </div>
+      </div>
+    </body>
+    </html>
+  `;
+
+  return await sendEmailViaBrevo(
+    email,
+    name,
+    `Welcome to ${organizationName} - FinLight`,
+    htmlContent
+  );
+};
+
 
 module.exports = {
   sendPasswordResetEmail,
   sendOrganizationWelcomeEmail,
+  sendMemberWelcomeEmail,
 };

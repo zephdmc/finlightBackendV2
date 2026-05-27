@@ -2,8 +2,7 @@ const User = require('../models/User');
 const Payment = require('../models/Payment');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
-const { sendPasswordResetEmail } = require('./emailService');
-
+const { sendOrganizationWelcomeEmail } = require('./emailServiceBrevo');
 /**
  * Authentication Service
  * Handles all authentication-related business logic
@@ -17,7 +16,7 @@ class AuthService {
    */
   generateToken(user) {
     return jwt.sign(
-      { 
+      {
         id: user._id,
         organizationId: user.organizationId,
         role: user.role
@@ -65,19 +64,14 @@ class AuthService {
       organizationId
     });
 
-    // If member, create registration payment record
-    if (user.role === 'member') {
-      await Payment.create({
-        user: user._id,
-        type: 'registration',
-        amount: 500, // Registration fee
-        status: 'unpaid',
-        organizationId
-      });
-    }
-
     // Generate token
     const token = this.generateToken(user);
+    await sendOrganizationWelcomeEmail(
+      user.email,
+      user.name,
+      organizationId, // or organization.name if available
+      `${process.env.FRONTEND_URL}/login`
+    );
 
     return {
       user: {
@@ -101,7 +95,7 @@ class AuthService {
   async login(email, password) {
     // Find user with password field
     const user = await User.findOne({ email }).select('+password');
-    
+
     if (!user) {
       const error = new Error('Invalid credentials');
       error.statusCode = 401;
@@ -141,7 +135,7 @@ class AuthService {
    */
   async changePassword(userId, currentPassword, newPassword) {
     const user = await User.findById(userId).select('+password');
-    
+
     if (!user) {
       const error = new Error('User not found');
       error.statusCode = 404;
@@ -178,10 +172,10 @@ class AuthService {
    */
   async requestPasswordReset(email) {
     console.log(`📧 Password reset requested for: ${email}`);
-    
+
     // Always return success for security (don't reveal if email exists)
     const user = await User.findOne({ email });
-    
+
     if (!user) {
       console.log(`⚠️ Password reset requested for non-existent email: ${email}`);
       return { success: true };
@@ -189,13 +183,13 @@ class AuthService {
 
     // Generate secure reset token
     const resetToken = crypto.randomBytes(32).toString('hex');
-    
+
     // 🔐 SECURITY FIX: Hash the token before storing in database
     const hashedToken = crypto
       .createHash('sha256')
       .update(resetToken)
       .digest('hex');
-    
+
     const resetTokenExpiry = Date.now() + 3600000; // 1 hour
 
     // Store HASHED token (not plain text)
@@ -206,16 +200,16 @@ class AuthService {
     // Generate reset URL with plain token (for user to click)
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
     const resetUrl = `${frontendUrl}/reset-password?token=${resetToken}`;
-    
+
     console.log(`🔗 Reset URL: ${resetUrl}`);
-    
+
     // Send email using Brevo
     const emailSent = await sendPasswordResetEmail(
-      user.email, 
-      user.name, 
+      user.email,
+      user.name,
       resetUrl
     );
-    
+
     if (!emailSent) {
       console.error(`❌ Failed to send password reset email to ${email}`);
       // Don't throw error - user will still get success message
@@ -231,7 +225,7 @@ class AuthService {
         resetUrl
       };
     }
-    
+
     return { success: true };
   }
 
@@ -243,7 +237,7 @@ class AuthService {
    */
   async resetPassword(token, newPassword) {
     console.log(`🔐 Attempting password reset with token: ${token?.substring(0, 10)}...`);
-    
+
     // Validate password
     if (!newPassword || newPassword.length < 6) {
       const error = new Error('Password must be at least 6 characters long');
@@ -301,10 +295,10 @@ class AuthService {
   validateAccess(userId, resourceUserId, userRole) {
     // Admin has full access
     if (userRole === 'admin') return true;
-    
+
     // Super admin has full access
     if (userRole === 'super_admin') return true;
-    
+
     // Users can only access their own resources
     return userId === resourceUserId;
   }
@@ -317,9 +311,9 @@ class AuthService {
   async hasPaidRegistration(userId) {
     const user = await User.findById(userId);
     if (!user) return false;
-    
+
     if (user.role === 'admin') return true;
-    
+
     return user.hasPaidRegistration;
   }
 
@@ -332,7 +326,7 @@ class AuthService {
     try {
       const decoded = this.verifyToken(oldToken);
       const user = await User.findById(decoded.id);
-      
+
       if (!user) {
         const error = new Error('User not found');
         error.statusCode = 404;
@@ -340,7 +334,7 @@ class AuthService {
       }
 
       const newToken = this.generateToken(user);
-      
+
       return {
         token: newToken,
         user: {
@@ -376,7 +370,7 @@ class AuthService {
    */
   async getSession(userId) {
     const user = await User.findById(userId).select('-password');
-    
+
     if (!user) {
       const error = new Error('User not found');
       error.statusCode = 404;
@@ -409,27 +403,27 @@ class AuthService {
    */
   validatePasswordStrength(password) {
     const errors = [];
-    
+
     if (password.length < 8) {
       errors.push('Password must be at least 8 characters long');
     }
-    
+
     if (!/[A-Z]/.test(password)) {
       errors.push('Password must contain at least one uppercase letter');
     }
-    
+
     if (!/[a-z]/.test(password)) {
       errors.push('Password must contain at least one lowercase letter');
     }
-    
+
     if (!/[0-9]/.test(password)) {
       errors.push('Password must contain at least one number');
     }
-    
+
     if (!/[!@#$%^&*]/.test(password)) {
       errors.push('Password must contain at least one special character (!@#$%^&*)');
     }
-    
+
     return {
       isValid: errors.length === 0,
       errors

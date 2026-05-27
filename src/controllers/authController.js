@@ -6,7 +6,8 @@ const jwt = require('jsonwebtoken');
 const { validationResult } = require('express-validator');
 const { addToEmailQueue } = require('../services/emailQueue');
 const { sendEmailViaBrevo } = require('../services/emailServiceBrevo');
-const { sendOrganizationWelcomeEmail } = require('../services/emailService');
+const { sendOrganizationWelcomeEmail } = require('../services/emailServiceBrevo');
+const { sendMemberWelcomeEmail } = require('./emailServiceBrevo');
 const mongoose = require('mongoose');
 // Generate JWT Token (now includes organizationId)
 const generateToken = (user) => {
@@ -98,6 +99,12 @@ exports.register = async (req, res, next) => {
         status: 'unpaid',
         organizationId: targetOrgId   // 🆕
       });
+      await sendMemberWelcomeEmail(
+        user.email,
+        user.name,
+        "Your Organization Name", // replace properly if dynamic
+        `${process.env.FRONTEND_URL}/login`
+      );
     }
     addToEmailQueue({
       name: `member-welcome-${user.email}`,
