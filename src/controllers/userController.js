@@ -387,6 +387,28 @@ class UserController {
 
       await user.save();
 
+      const organization = await Organization.findById(targetOrgId);
+      if (!organization) {
+        return res.status(404).json({
+          success: false,
+          message: 'Organization not found'
+        });
+      }
+
+      // ✅ QUEUE the email instead of sending directly
+      const loginUrl = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/login`;
+      addToEmailQueue({
+        name: `member-welcome-${user._id}-${Date.now()}`,
+        maxRetries: 5,
+        retryDelay: 2000,
+        task: async () => {
+          await sendMemberWelcomeEmail(user.email, user.name, organization.name, loginUrl, password);
+          console.log(`✅ Welcome email sent to ${user.email}`);
+        }
+      });
+
+      console.log(`📧 Member  email queued for ${user.email}`);
+
       res.status(200).json({
         success: true,
         data: {
