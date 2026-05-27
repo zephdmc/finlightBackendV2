@@ -316,7 +316,7 @@ class UserController {
             email: user.email,
             phoneNumber: user.phoneNumber || '',
             role: user.role,
-            smsSent: smsSent // Optional: include SMS status in response
+            // smsSent: smsSent // Optional: include SMS status in response
           }
         },
         message: phoneNumber
