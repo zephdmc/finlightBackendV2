@@ -6,8 +6,8 @@ const jwt = require('jsonwebtoken');
 const { validationResult } = require('express-validator');
 const { addToEmailQueue } = require('../services/emailQueue');
 const { sendEmailViaBrevo } = require('../services/emailServiceBrevo');
-const { sendOrganizationWelcomeEmail } = require('../services/emailServiceBrevo');
-const { sendMemberWelcomeEmail } = require('../services/emailService');
+const { sendOrganizationWelcomeEmail, sendMemberWelcomeEmail } = require('../services/emailServiceBrevo');
+// const { sendMemberWelcomeEmail } = require('../services/emailService');
 const generateToken = (user) => {
   return jwt.sign(
     {
