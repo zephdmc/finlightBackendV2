@@ -3,9 +3,8 @@ const User = require('../models/User');
 const Payment = require('../models/Payment');
 const bcrypt = require('bcryptjs');
 const mongoose = require('mongoose');
-const { addToEmailQueue } = require('../services/emailQueue');
-const { sendEmailViaBrevo } = require('../services/emailServiceBrevo');
 const { sendMemberWelcomeEmail } = require('../services/emailServiceBrevo');
+const Organization = require('../models/Organization');
 
 /**
  * User Controller - Handles all user management operations
@@ -272,6 +271,32 @@ class UserController {
         organizationId
       });
 
+      const organization = await Organization.findById(targetOrgId);
+      if (!organization) {
+        return res.status(404).json({
+          success: false,
+          message: 'Organization not found'
+        });
+      }
+
+
+      // // Get organization name for the message
+      // const Organization = require('../models/Organization');
+      // const organization = await Organization.findById(organizationId);
+      // const organizationName = organization ? organization.name : 'your organization';
+      // ✅ QUEUE the email instead of sending directly
+      const loginUrl = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/login`;
+      addToEmailQueue({
+        name: `member-welcome-${user._id}-${Date.now()}`,
+        maxRetries: 5,
+        retryDelay: 2000,
+        task: async () => {
+          await sendMemberWelcomeEmail(user.email, user.name, organization.name, loginUrl, password);
+          console.log(`✅ Welcome email sent to ${user.email}`);
+        }
+      });
+
+
       // If member, create registration payment record
       if (role === 'member') {
         await Payment.create({
@@ -285,19 +310,7 @@ class UserController {
           organizationId
         });
       }
-      // ✅ QUEUE the email instead of sending directly
-      const loginUrl = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/login`;
-      addToEmailQueue({
-        name: `member-welcome-${user._id}-${Date.now()}`,
-        maxRetries: 5,
-        retryDelay: 2000,
-        task: async () => {
-          await sendMemberWelcomeEmail(user.email, user.name, organization.name, loginUrl, password);
-          console.log(`✅ Welcome email sent to ${user.email}`);
-        }
-      });
 
-      console.log(`📧 Member welcome email queued for ${user.email}`);
 
 
 
@@ -311,7 +324,7 @@ class UserController {
             email: user.email,
             phoneNumber: user.phoneNumber || '',
             role: user.role,
-            organizationId: user.organizationId
+            smsSent: smsSent // Optional: include SMS status in response
           }
         },
         message: phoneNumber
