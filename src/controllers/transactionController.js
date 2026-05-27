@@ -68,8 +68,8 @@ class TransactionController {
 
       await notifyOrganization({
         organizationId,
-        title: 'Expenditure Deleted 🔔',
-        message: `${income.description} - ₦${income.amount} has been Deleted.`,
+        title: 'income Recorded 🔔',
+        message: `${income.description} - ₦${income.amount} has been recorded.`,
         type: 'payment',
         metadata: {
           description: description
@@ -156,8 +156,8 @@ class TransactionController {
       });
       await notifyOrganization({
         organizationId,
-        title: 'Expenditure Created 🔔',
-        message: `${expenditure.description} - ₦${expenditure.amount} has been created.`,
+        title: 'Expenditure Recorded 🔔',
+        message: `${expenditure.description} - ₦${expenditure.amount} has been Recorded.`,
         type: 'payment',
         metadata: {
           description: description
