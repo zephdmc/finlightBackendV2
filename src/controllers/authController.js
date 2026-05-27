@@ -7,7 +7,7 @@ const { validationResult } = require('express-validator');
 const { addToEmailQueue } = require('../services/emailQueue');
 const { sendEmailViaBrevo } = require('../services/emailServiceBrevo');
 const { sendOrganizationWelcomeEmail } = require('../services/emailServiceBrevo');
-const { sendMemberWelcomeEmail } = require('./emailServiceBrevo');
+const { sendMemberWelcomeEmail } = require('../services/emailServiceBrevo');
 const mongoose = require('mongoose');
 // Generate JWT Token (now includes organizationId)
 const generateToken = (user) => {
