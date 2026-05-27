@@ -306,24 +306,20 @@ class UserController {
 
 
 
-      // Return user with phoneNumber and SMS status
+      // ✅ CORRECTED RESPONSE - No extra 'data' wrapper
       res.status(201).json({
         success: true,
-        data: {
-          user: {
-            id: user._id,
-            name: user.name,
-            email: user.email,
-            phoneNumber: user.phoneNumber || '',
-            role: user.role,
-            // smsSent: smsSent // Optional: include SMS status in response
-          }
+        token,
+        user: {
+          id: user._id,
+          name: user.name,
+          email: user.email,
+          phoneNumber: user.phoneNumber || '',
+          role: user.role,
+          organizationId: user.organizationId,
+          hasPaidRegistration: user.hasPaidRegistration
         },
-        message: phoneNumber
-          ? (smsSent
-            ? 'Member registered successfully. Login credentials sent via SMS.'
-            : 'Member registered successfully. SMS delivery failed. Please check the phone number.')
-          : 'Member registered successfully. No phone number provided for SMS.'
+        message: `${user.role === 'admin' ? 'Admin' : 'Member'} registered successfully!`
       });
     } catch (error) {
       console.error('Registration error:', error);
