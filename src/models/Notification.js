@@ -26,6 +26,11 @@ const notificationSchema = new mongoose.Schema({
         type: Boolean,
         default: false
     },
+    createdAt: {
+        type: Date,
+        default: Date.now,
+        expires: 14 * 24 * 60 * 60 // Auto-delete after 14 days (in seconds)
+    },
 
     metadata: {
         type: Object,
@@ -34,5 +39,8 @@ const notificationSchema = new mongoose.Schema({
 }, {
     timestamps: true
 });
+
+// Index for faster queries
+notificationSchema.index({ organizationId: 1, createdAt: -1 });
 
 module.exports = mongoose.model('Notification', notificationSchema);
