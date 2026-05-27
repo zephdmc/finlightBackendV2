@@ -30,14 +30,14 @@ class OrganizationController {
    * Helper: ensure user is super_admin (handles both formats)
    */
   requireSuperAdmin(req, res, next) {
-    const isSuperAdmin = req.user?.role === 'super_admin' || 
-                        req.user?.role === 'super-admin';
-    
+    const isSuperAdmin = req.user?.role === 'super_admin' ||
+      req.user?.role === 'super-admin';
+
     if (!isSuperAdmin) {
       console.log(`Access denied. User role: ${req.user?.role}`);
-      return res.status(403).json({ 
-        success: false, 
-        message: 'Super admin access required' 
+      return res.status(403).json({
+        success: false,
+        message: 'Super admin access required'
       });
     }
     next();
@@ -49,27 +49,27 @@ class OrganizationController {
   async getBankCode(bankName) {
     try {
       console.log('🔍 Fetching bank code for:', bankName);
-      
+
       const response = await fetch('https://api.paystack.co/bank', {
         headers: {
           'Authorization': `Bearer ${process.env.PAYSTACK_SECRET_KEY}`
         }
       });
       const data = await response.json();
-      
+
       if (data.status) {
         // Try exact match first, then partial match
-        let bank = data.data.find(b => 
+        let bank = data.data.find(b =>
           b.name.toLowerCase() === bankName.toLowerCase()
         );
-        
+
         if (!bank) {
-          bank = data.data.find(b => 
+          bank = data.data.find(b =>
             b.name.toLowerCase().includes(bankName.toLowerCase()) ||
             bankName.toLowerCase().includes(b.name.toLowerCase())
           );
         }
-        
+
         console.log('Bank found:', bank ? bank.name : 'Not found');
         return bank ? bank.code : null;
       }
@@ -146,24 +146,24 @@ class OrganizationController {
   async getAllOrganizations(req, res, next) {
     try {
       const organizations = await Organization.find().sort({ createdAt: -1 });
-      
+
       const orgsWithDetails = await Promise.all(
         organizations.map(async (org) => {
-          const adminCount = await User.countDocuments({ 
-            organizationId: org._id, 
-            role: 'admin' 
+          const adminCount = await User.countDocuments({
+            organizationId: org._id,
+            role: 'admin'
           });
-          
-          const primaryAdmin = await User.findOne({ 
-            organizationId: org._id, 
-            role: 'admin' 
+
+          const primaryAdmin = await User.findOne({
+            organizationId: org._id,
+            role: 'admin'
           }).select('name email');
-          
-          const memberCount = await User.countDocuments({ 
-            organizationId: org._id, 
-            role: 'member' 
+
+          const memberCount = await User.countDocuments({
+            organizationId: org._id,
+            role: 'member'
           });
-          
+
           return {
             ...org.toObject(),
             adminCount,
@@ -172,16 +172,16 @@ class OrganizationController {
           };
         })
       );
-      
-      res.status(200).json({ 
-        success: true, 
-        data: orgsWithDetails 
+
+      res.status(200).json({
+        success: true,
+        data: orgsWithDetails
       });
     } catch (error) {
       console.error('Error in getAllOrganizations:', error);
-      res.status(500).json({ 
-        success: false, 
-        message: error.message || 'Failed to fetch organizations' 
+      res.status(500).json({
+        success: false,
+        message: error.message || 'Failed to fetch organizations'
       });
     }
   }
@@ -195,17 +195,17 @@ class OrganizationController {
       const { name, slug, paystack, adminEmail, adminName, adminPassword } = req.body;
 
       if (!name || !slug) {
-        return res.status(400).json({ 
-          success: false, 
-          message: 'Name and slug are required' 
+        return res.status(400).json({
+          success: false,
+          message: 'Name and slug are required'
         });
       }
 
       const existingOrg = await Organization.findOne({ slug });
       if (existingOrg) {
-        return res.status(400).json({ 
-          success: false, 
-          message: 'Organization slug already exists' 
+        return res.status(400).json({
+          success: false,
+          message: 'Organization slug already exists'
         });
       }
 
@@ -220,21 +220,21 @@ class OrganizationController {
           subaccountStatus: 'pending'
         }
       });
-      
+
       const savedOrg = await organization.save();
 
       let adminUser = null;
-      
+
       if (adminEmail && adminName && adminPassword) {
         const existingUser = await User.findOne({ email: adminEmail });
         if (existingUser) {
           await Organization.findByIdAndDelete(savedOrg._id);
-          return res.status(400).json({ 
-            success: false, 
-            message: 'Admin email already registered' 
+          return res.status(400).json({
+            success: false,
+            message: 'Admin email already registered'
           });
         }
-        
+
         adminUser = new User({
           name: adminName,
           email: adminEmail,
@@ -245,12 +245,16 @@ class OrganizationController {
           hasCompletedRegistration: true,
           isActive: true
         });
-        
+
         await adminUser.save();
-         
+
         // ✅ SEND WELCOME EMAIL TO ADMIN
         const loginUrl = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/login`;
-        await sendOrganizationWelcomeEmail(adminEmail, adminName, name, loginUrl);
+        try {
+          await sendOrganizationWelcomeEmail(adminEmail, adminName, name, loginUrl);
+        } catch (error) {
+          console.error('Email failed:', error.message);
+        }
       }
 
       res.status(201).json({
@@ -267,9 +271,9 @@ class OrganizationController {
       });
     } catch (error) {
       console.error('Error in createOrganization:', error);
-      res.status(500).json({ 
-        success: false, 
-        message: error.message || 'Failed to create organization' 
+      res.status(500).json({
+        success: false,
+        message: error.message || 'Failed to create organization'
       });
     }
   }
@@ -293,24 +297,24 @@ class OrganizationController {
         updateData,
         { new: true, runValidators: true }
       );
-      
+
       if (!organization) {
-        return res.status(404).json({ 
-          success: false, 
-          message: 'Organization not found' 
+        return res.status(404).json({
+          success: false,
+          message: 'Organization not found'
         });
       }
-      
-      res.status(200).json({ 
-        success: true, 
+
+      res.status(200).json({
+        success: true,
         data: organization,
         message: 'Organization updated successfully'
       });
     } catch (error) {
       console.error('Error in updateOrganization:', error);
-      res.status(500).json({ 
-        success: false, 
-        message: error.message || 'Failed to update organization' 
+      res.status(500).json({
+        success: false,
+        message: error.message || 'Failed to update organization'
       });
     }
   }
@@ -325,23 +329,23 @@ class OrganizationController {
 
       await User.deleteMany({ organizationId: id });
       const organization = await Organization.findByIdAndDelete(id);
-      
+
       if (!organization) {
-        return res.status(404).json({ 
-          success: false, 
-          message: 'Organization not found' 
+        return res.status(404).json({
+          success: false,
+          message: 'Organization not found'
         });
       }
-      
-      res.status(200).json({ 
-        success: true, 
-        message: 'Organization deleted successfully' 
+
+      res.status(200).json({
+        success: true,
+        message: 'Organization deleted successfully'
       });
     } catch (error) {
       console.error('Error in deleteOrganization:', error);
-      res.status(500).json({ 
-        success: false, 
-        message: error.message || 'Failed to delete organization' 
+      res.status(500).json({
+        success: false,
+        message: error.message || 'Failed to delete organization'
       });
     }
   }
@@ -354,26 +358,26 @@ class OrganizationController {
     try {
       const { id } = req.params;
       const { status, reason } = req.body;
-      
+
       const organization = await Organization.findById(id);
-      
+
       if (!organization) {
         return res.status(404).json({
           success: false,
           message: 'Organization not found'
         });
       }
-      
+
       organization.status = status;
       organization.updatedAt = new Date();
-      
+
       if (reason) {
         organization.statusChangeReason = reason;
         organization.statusChangedBy = req.user.id;
       }
-      
+
       await organization.save();
-      
+
       if (status === 'suspended') {
         await User.updateMany(
           { organizationId: id },
@@ -385,7 +389,7 @@ class OrganizationController {
           { isActive: true, $unset: { suspendedAt: "", suspendedBy: "" } }
         );
       }
-      
+
       res.status(200).json({
         success: true,
         data: {
@@ -419,7 +423,7 @@ class OrganizationController {
           { $group: { _id: null, total: { $sum: '$amount' } } }
         ])
       ]);
-      
+
       res.status(200).json({
         success: true,
         data: {
@@ -446,23 +450,23 @@ class OrganizationController {
   async getOrganizationById(req, res, next) {
     try {
       const { id } = req.params;
-      
+
       const organization = await Organization.findById(id);
-      
+
       if (!organization) {
         return res.status(404).json({
           success: false,
           message: 'Organization not found'
         });
       }
-      
+
       const [admins, memberCount, recentPayments, recentTransactions] = await Promise.all([
         User.find({ organizationId: id, role: 'admin' }).select('name email createdAt'),
         User.countDocuments({ organizationId: id, role: 'member' }),
         require('../models/Payment').find({ organizationId: id }).sort({ createdAt: -1 }).limit(10),
         require('../models/Income').find({ organizationId: id }).sort({ createdAt: -1 }).limit(5)
       ]);
-      
+
       res.status(200).json({
         success: true,
         data: {
@@ -488,7 +492,7 @@ class OrganizationController {
   async getOrganizationSettings(req, res, next) {
     try {
       const organizationId = req.user.organizationId;
-      
+
       if (!organizationId) {
         return res.status(400).json({
           success: false,
@@ -497,7 +501,7 @@ class OrganizationController {
       }
 
       const organization = await Organization.findById(organizationId);
-      
+
       if (!organization) {
         return res.status(404).json({
           success: false,
@@ -509,7 +513,7 @@ class OrganizationController {
         organizationId: organizationId,
         role: 'admin'
       });
-      
+
       const memberCount = await User.countDocuments({
         organizationId: organizationId,
         role: 'member'
@@ -538,7 +542,7 @@ class OrganizationController {
     try {
       const organizationId = req.user.organizationId;
       const { paystack, settings } = req.body;
-      
+
       if (!organizationId) {
         return res.status(400).json({
           success: false,
@@ -556,7 +560,7 @@ class OrganizationController {
         updateData,
         { new: true, runValidators: true }
       );
-      
+
       if (!organization) {
         return res.status(404).json({
           success: false,
@@ -583,13 +587,13 @@ class OrganizationController {
   async updateBankDetails(req, res, next) {
     try {
       console.log('=== UPDATE BANK DETAILS CALLED ===');
-      
+
       const organizationId = req.user?.organizationId;
       const { bankName, accountNumber, accountName } = req.body;
-      
+
       console.log('Organization ID:', organizationId);
       console.log('Bank details:', { bankName, accountNumber, accountName });
-      
+
       if (!organizationId) {
         return res.status(400).json({
           success: false,
@@ -614,9 +618,9 @@ class OrganizationController {
       }
 
       // Get admin user for contact email
-      const admin = await User.findOne({ 
-        organizationId: organizationId, 
-        role: 'admin' 
+      const admin = await User.findOne({
+        organizationId: organizationId,
+        role: 'admin'
       });
 
       if (!admin) {
@@ -630,7 +634,7 @@ class OrganizationController {
       console.log('Calling getBankCode for:', bankName);
       const bankCode = await this.getBankCode(bankName);
       console.log('Bank code result:', bankCode);
-      
+
       if (!bankCode) {
         return res.status(400).json({
           success: false,
@@ -666,7 +670,7 @@ class OrganizationController {
         subaccountVerified: subaccountResult.isVerified
       };
       organization.updatedAt = new Date();
-      
+
       await organization.save();
 
       console.log(`✅ Subaccount created: ${subaccountResult.subaccountCode}`);
@@ -702,7 +706,7 @@ class OrganizationController {
   async getSubaccountStatus(req, res, next) {
     try {
       const organizationId = req.user.organizationId;
-      
+
       const organization = await Organization.findById(organizationId);
       if (!organization) {
         return res.status(404).json({
@@ -736,26 +740,26 @@ class OrganizationController {
   async getOrganizationById(req, res, next) {
     try {
       const { id } = req.params;
-      
+
       const organization = await Organization.findById(id);
-      
+
       if (!organization) {
-        return res.status(404).json({ 
-          success: false, 
-          message: 'Organization not found' 
+        return res.status(404).json({
+          success: false,
+          message: 'Organization not found'
         });
       }
-      
-      const admins = await User.find({ 
-        organizationId: id, 
-        role: 'admin' 
+
+      const admins = await User.find({
+        organizationId: id,
+        role: 'admin'
       }).select('name email');
-      
-      const memberCount = await User.countDocuments({ 
-        organizationId: id, 
-        role: 'member' 
+
+      const memberCount = await User.countDocuments({
+        organizationId: id,
+        role: 'member'
       });
-      
+
       res.status(200).json({
         success: true,
         data: {
@@ -766,9 +770,9 @@ class OrganizationController {
       });
     } catch (error) {
       console.error('Error fetching organization:', error);
-      res.status(500).json({ 
-        success: false, 
-        message: error.message || 'Failed to fetch organization' 
+      res.status(500).json({
+        success: false,
+        message: error.message || 'Failed to fetch organization'
       });
     }
   }

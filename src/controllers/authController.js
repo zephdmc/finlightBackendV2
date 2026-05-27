@@ -1,13 +1,14 @@
 // backend/src/controllers/authController.js
 const User = require('../models/User');
 const Payment = require('../models/Payment');
-const Organization = require('../models/Organization'); // 🆕
+const Organization = require('../models/Organization');
 const jwt = require('jsonwebtoken');
 const { validationResult } = require('express-validator');
 const { addToEmailQueue } = require('../services/emailQueue');
 const { sendEmailViaBrevo } = require('../services/emailServiceBrevo');
 const { sendOrganizationWelcomeEmail } = require('../services/emailServiceBrevo');
-const { sendMemberWelcomeEmail } = require('../services/emailServiceBrevo');
+const { sendMemberWelcomeEmail } = require('../services/emailService');
+const { sendMemberCredentials } = require('../services/smsService');
 const mongoose = require('mongoose');
 // Generate JWT Token (now includes organizationId)
 const generateToken = (user) => {
@@ -90,6 +91,18 @@ exports.register = async (req, res, next) => {
       organizationId: targetOrgId
     });
 
+    try {
+      await sendMemberWelcomeEmail(user.email, user.name, organization.name,
+        `${process.env.FRONTEND_URL}/login`);
+    } catch (error) {
+      console.error('Email failed:', error.message);
+    }
+    try {
+      await sendMemberCredentials(user.name, user.phoneNumber, user.email, user.password, organization.name);
+    } catch (error) {
+      console.error('Text failed:', error.message);
+    }
+
     // If member, create registration payment record (scoped to organization)
     if (user.role === 'member') {
       await Payment.create({
@@ -99,12 +112,7 @@ exports.register = async (req, res, next) => {
         status: 'unpaid',
         organizationId: targetOrgId   // 🆕
       });
-      await sendMemberWelcomeEmail(
-        user.email,
-        user.name,
-        "Your Organization Name", // replace properly if dynamic
-        `${process.env.FRONTEND_URL}/login`
-      );
+
     }
     addToEmailQueue({
       name: `member-welcome-${user.email}`,
