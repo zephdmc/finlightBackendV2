@@ -513,7 +513,7 @@ class ValidationMiddleware {
   };
 
   /**
-   * Organization validation rules
+   * Organization validation rules (UPDATED for Flutterwave)
    */
   static organization = {
     create: [
@@ -528,18 +528,25 @@ class ValidationMiddleware {
         .withMessage('Slug is required')
         .matches(/^[a-z0-9-]+$/)
         .withMessage('Slug can only contain lowercase letters, numbers, and hyphens'),
-      body('paystack.subaccountCode')
+      // Flutterwave fields
+      body('flutterwave.subaccountId')
         .optional()
-        .matches(/^[A-Z0-9_]+$/i)
+        .matches(/^\d+$/)
+        .withMessage('Invalid subaccount ID (must be numeric)'),
+      body('flutterwave.subaccountCode')
+        .optional()
+        .matches(/^[A-Za-z0-9_-]+$/)
         .withMessage('Invalid subaccount code format'),
-      body('paystack.bankName')
+      body('flutterwave.bankName')
         .optional()
-        .trim(),
-      body('paystack.accountNumber')
+        .trim()
+        .isLength({ min: 2, max: 100 }),
+      body('flutterwave.accountNumber')
         .optional()
         .isNumeric()
         .isLength({ min: 10, max: 10 })
         .withMessage('Account number must be 10 digits'),
+      // Admin creation fields
       body('adminEmail')
         .isEmail()
         .withMessage('Valid admin email is required'),
@@ -563,13 +570,18 @@ class ValidationMiddleware {
       body('slug')
         .optional()
         .matches(/^[a-z0-9-]+$/),
-      body('paystack.subaccountCode')
+      // Flutterwave fields (optional update)
+      body('flutterwave.subaccountId')
         .optional()
-        .matches(/^[A-Z0-9_]+$/i),
-      body('paystack.bankName')
+        .matches(/^\d+$/)
+        .withMessage('Invalid subaccount ID'),
+      body('flutterwave.subaccountCode')
+        .optional()
+        .matches(/^[A-Za-z0-9_-]+$/),
+      body('flutterwave.bankName')
         .optional()
         .trim(),
-      body('paystack.accountNumber')
+      body('flutterwave.accountNumber')
         .optional()
         .isNumeric()
         .isLength({ min: 10, max: 10 }),

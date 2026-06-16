@@ -14,6 +14,18 @@ const startServer = async () => {
   try {
     // Connect to database using your database config
     await database.connect();
+    const requiredEnv = ['FLW_SECRET_KEY', 'FLW_PUBLIC_KEY', 'FLW_ENCRYPTION_KEY', 'FLW_WEBHOOK_SECRET', 'PLATFORM_SUBACCOUNT_ID'];
+    const missing = requiredEnv.filter(key => !process.env[key]);
+    if (missing.length) {
+      console.error(`❌ Missing required environment variables: ${missing.join(', ')}`);
+      process.exit(1);
+    }
+    console.log('✅ All Flutterwave environment variables are set');
+
+
+
+    
+
     const server = app.listen(PORT, '0.0.0.0', () => {
       console.log(`🚀 Server running on port ${PORT}`);
       console.log(`🌍 Environment: ${NODE_ENV}`);
@@ -26,6 +38,9 @@ const startServer = async () => {
       console.log(`📊 Database: ${dbStatus.name}`);
       console.log(`🔐 Database Connected: ${dbStatus.isConnected}`);
     });
+
+
+    
 
     // Handle shutdown signals gracefully
     const gracefulShutdown = async () => {

@@ -26,7 +26,7 @@ const paymentSchema = new mongoose.Schema({
     min: 0,
     comment: 'What organization should receive (target amount)'
   },
-  
+
   // ==================== PARTIAL PAYMENT FIELDS ====================
   targetOrgAmount: {
     type: Number,
@@ -80,15 +80,15 @@ const paymentSchema = new mongoose.Schema({
       comment: 'Transaction reference for this partial payment'
     },
     fees: {
-      paystackFee: {
+      flutterwaveFee: {   // changed from paystackFee
         type: Number,
         default: 0,
-        comment: 'Paystack fee deducted'
+        comment: 'Flutterwave fee deducted (2%)'
       },
       platformFee: {
         type: Number,
         default: 0,
-        comment: 'Platform fee deducted'
+        comment: 'Platform fee deducted (4%)'
       },
       totalFees: {
         type: Number,
@@ -102,14 +102,14 @@ const paymentSchema = new mongoose.Schema({
       comment: 'Optional notes for manual partial payments'
     }
   }],
-  
+
   // Legacy fields for backward compatibility
   paidAmount: {
     type: Number,
     default: 0,
     comment: 'Legacy: Use totalPaidSoFar instead'
   },
-  
+
   dueDate: {
     type: Date,
     default: null
@@ -136,21 +136,21 @@ const paymentSchema = new mongoose.Schema({
     ref: 'Organization',
     required: [true, 'Organization ID is required']
   },
-  
-  // ==================== FEE TRACKING FIELDS ====================
-  // Actual amount paid by user (after Paystack fee deduction)
+
+  // ==================== FEE TRACKING FIELDS (Flutterwave) ====================
+  // Actual amount paid by user (including fees)
   actualAmountPaid: {
     type: Number,
     default: 0,
     comment: 'Actual amount paid by member'
   },
-  // Fee deducted by Paystack (1.5% + ₦100 for amounts ≥ ₦2,500)
-  paystackFeeDeducted: {
+  // Fee deducted by Flutterwave (2% flat)
+  flutterwaveFeeDeducted: {   // renamed from paystackFeeDeducted
     type: Number,
     default: 0,
-    comment: 'Paystack processing fee'
+    comment: 'Flutterwave processing fee (2%)'
   },
-  // Platform fee deducted (4% of after-Paystack amount)
+  // Platform fee deducted (4% of total paid)
   platformFeeDeducted: {
     type: Number,
     default: 0,
@@ -162,20 +162,20 @@ const paymentSchema = new mongoose.Schema({
     default: 0,
     comment: 'What organization actually received after all fees'
   },
-  // Amount after Paystack fee before platform split
-  afterPaystackAmount: {
+  // Amount after Flutterwave fee before platform split
+  afterFlutterwaveAmount: {   // renamed from afterPaystackAmount
     type: Number,
     default: 0,
-    comment: 'Amount after Paystack fee deduction'
+    comment: 'Amount after Flutterwave fee deduction'
   },
-  
+
   // Metadata for additional info
   metadata: {
     type: mongoose.Schema.Types.Mixed,
     default: {},
     comment: 'Additional metadata for tracking'
   },
-  
+
   createdAt: {
     type: Date,
     default: Date.now
@@ -188,31 +188,30 @@ const paymentSchema = new mongoose.Schema({
 
 // ==================== PRE-SAVE HOOKS ====================
 
-// Update updatedAt on save
 paymentSchema.pre('save', function(next) {
   this.updatedAt = new Date();
-  
+
   // Auto-set targetOrgAmount if not set
   if (!this.targetOrgAmount && this.amount) {
     this.targetOrgAmount = this.amount;
   }
-  
+
   // Auto-set remainingAmount if not set
   if (!this.remainingAmount && this.amount) {
     this.remainingAmount = this.amount;
   }
-  
+
   // Set status to 'paid' when remainingAmount is 0
   if (this.remainingAmount <= 0 && this.status !== 'paid') {
     this.status = 'paid';
     this.paidAt = this.paidAt || new Date();
   }
-  
+
   // Set status to 'partial' when partially paid
   if (this.totalPaidSoFar > 0 && this.remainingAmount > 0 && this.status !== 'partial') {
     this.status = 'partial';
   }
-  
+
   next();
 });
 
@@ -234,9 +233,9 @@ paymentSchema.virtual('hasOutstandingBalance').get(function() {
   return this.remainingAmount > 0 && this.status !== 'paid';
 });
 
-// Virtual for total fees paid
+// Virtual for total fees paid (Flutterwave + platform)
 paymentSchema.virtual('totalFeesPaid').get(function() {
-  return (this.paystackFeeDeducted || 0) + (this.platformFeeDeducted || 0);
+  return (this.flutterwaveFeeDeducted || 0) + (this.platformFeeDeducted || 0);
 });
 
 // ==================== INSTANCE METHODS ====================
@@ -252,24 +251,24 @@ paymentSchema.methods.addPartialPayment = function(partialData) {
     date: partialData.date || new Date(),
     transactionReference: partialData.transactionReference,
     fees: partialData.fees || {
-      paystackFee: 0,
+      flutterwaveFee: 0,
       platformFee: 0,
       totalFees: 0
     },
     notes: partialData.notes || ''
   });
-  
+
   this.totalPaidSoFar = (this.totalPaidSoFar || 0) + partialData.amount;
   this.remainingAmount = (this.targetOrgAmount || this.amount) - this.totalPaidSoFar;
   this.isPartial = this.remainingAmount > 0;
-  
+
   if (this.remainingAmount <= 0) {
     this.status = 'paid';
     this.paidAt = new Date();
   } else {
     this.status = 'partial';
   }
-  
+
   return this.save();
 };
 
@@ -325,7 +324,7 @@ paymentSchema.statics.getTotalOutstandingByUser = async function(userId, organiz
       }
     }
   ]);
-  
+
   return result.length > 0 ? result[0].total : 0;
 };
 
@@ -364,8 +363,8 @@ paymentSchema.index({ organizationId: 1, user: 1, status: 1, remainingAmount: 1 
 // For finding partial payments
 paymentSchema.index({ organizationId: 1, isPartial: 1, status: 1 });
 
-// Fee tracking indexes for reporting
-paymentSchema.index({ organizationId: 1, paystackFeeDeducted: 1 });
+// Fee tracking indexes (Flutterwave + platform)
+paymentSchema.index({ organizationId: 1, flutterwaveFeeDeducted: 1 });
 paymentSchema.index({ organizationId: 1, platformFeeDeducted: 1 });
 paymentSchema.index({ organizationId: 1, netToOrganization: 1 });
 
