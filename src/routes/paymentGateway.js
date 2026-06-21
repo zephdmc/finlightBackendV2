@@ -1175,6 +1175,7 @@ const validatePaymentVerification = [
 ];
 
 // ==================== PAYMENT INITIALIZATION (FLUTTERWAVE WITH TWO SUBACCOUNTS) ====================
+// ==================== PAYMENT INITIALIZATION (FLUTTERWAVE WITH TWO SUBACCOUNTS) ====================
 router.post('/initialize', protect, paymentInitLimiter, validatePaymentInit, async (req, res) => {
 
   try {
@@ -1292,7 +1293,25 @@ router.post('/initialize', protect, paymentInitLimiter, validatePaymentInit, asy
     };
 
     console.log('📤 Sending to Flutterwave with split:', payload);
-    const response = await withRetry(() => flw.Payment.initiate(payload));
+
+    // ===== FIX: USE DIRECT API CALL INSTEAD OF SDK =====
+    console.log('🔄 Using direct API call to Flutterwave...');
+    const response = await withRetry(async () => {
+      const axiosResponse = await axios.post(
+        'https://api.flutterwave.com/v3/payments',
+        payload,
+        {
+          headers: {
+            'Authorization': `Bearer ${FLW_SECRET_KEY}`,
+            'Content-Type': 'application/json'
+          },
+          timeout: 30000
+        }
+      );
+      console.log('📥 Flutterwave API response status:', axiosResponse.data.status);
+      return axiosResponse.data;
+    });
+
     if (response.status === 'success') {
       payment.transactionReference = response.data.tx_ref;
       payment.paymentUrl = response.data.link;
@@ -1327,6 +1346,7 @@ router.post('/initialize', protect, paymentInitLimiter, validatePaymentInit, asy
     }
   } catch (error) {
     console.error('Payment initialization error:', error);
+    console.error('Error details:', error.response?.data || error.message);
     res.status(500).json({ success: false, message: error.message || 'Internal server error' });
   }
 });
