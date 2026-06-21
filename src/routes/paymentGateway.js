@@ -787,12 +787,137 @@ const FRONTEND_URL = process.env.FRONTEND_URL || 'https://finlightv2.web.app';
 const PLATFORM_SUBACCOUNT_ID = process.env.PLATFORM_SUBACCOUNT_ID;
 
 // Initialize Flutterwave SDK
-const flw = new Flutterwave(FLW_PUBLIC_KEY, FLW_SECRET_KEY);
+// ===== FIX: Proper Flutterwave SDK Initialization with Fallback =====
+const axios = require('axios');
+let flw;
+
+try {
+  // Initialize with public and secret keys
+  flw = new Flutterwave(FLW_PUBLIC_KEY, FLW_SECRET_KEY);
+  console.log('✅ Flutterwave SDK initialized successfully');
+  console.log('   Payment object exists:', !!flw.Payment);
+  console.log('   initiate method exists:', typeof flw.Payment?.initiate === 'function');
+} catch (error) {
+  console.error('❌ Flutterwave SDK initialization error:', error.message);
+  console.error('   Public Key present:', !!FLW_PUBLIC_KEY);
+  console.error('   Secret Key present:', !!FLW_SECRET_KEY);
+
+  // Create a fallback that uses direct API calls
+  flw = {
+    Payment: {
+      initiate: async (payload) => {
+        console.log('🔄 Using direct API call fallback for payment...');
+        const response = await axios.post(
+          'https://api.flutterwave.com/v3/payments',
+          payload,
+          {
+            headers: {
+              'Authorization': `Bearer ${FLW_SECRET_KEY}`,
+              'Content-Type': 'application/json'
+            }
+          }
+        );
+        return response.data;
+      }
+    },
+    Transaction: {
+      verify: async ({ id }) => {
+        console.log('🔄 Using direct API call for verification...');
+        const response = await axios.get(
+          `https://api.flutterwave.com/v3/transactions/${id}/verify`,
+          {
+            headers: {
+              'Authorization': `Bearer ${FLW_SECRET_KEY}`
+            }
+          }
+        );
+        return response.data;
+      }
+    },
+    Subaccount: {
+      create: async (payload) => {
+        console.log('🔄 Using direct API call for subaccount creation...');
+        const response = await axios.post(
+          'https://api.flutterwave.com/v3/subaccounts',
+          payload,
+          {
+            headers: {
+              'Authorization': `Bearer ${FLW_SECRET_KEY}`,
+              'Content-Type': 'application/json'
+            }
+          }
+        );
+        return response.data;
+      }
+    },
+    Misc: {
+      verify_Account: async ({ account_number, account_bank }) => {
+        console.log('🔄 Using direct API call for account verification...');
+        const response = await axios.post(
+          'https://api.flutterwave.com/v3/accounts/resolve',
+          { account_number, account_bank },
+          {
+            headers: {
+              'Authorization': `Bearer ${FLW_SECRET_KEY}`,
+              'Content-Type': 'application/json'
+            }
+          }
+        );
+        return response.data;
+      }
+    },
+    Bank: {
+      get_banks: async ({ country }) => {
+        const response = await axios.get(
+          `https://api.flutterwave.com/v3/banks/${country}`,
+          {
+            headers: {
+              'Authorization': `Bearer ${FLW_SECRET_KEY}`
+            }
+          }
+        );
+        return response.data;
+      },
+      list: async ({ country }) => {
+        const response = await axios.get(
+          `https://api.flutterwave.com/v3/banks/${country}`,
+          {
+            headers: {
+              'Authorization': `Bearer ${FLW_SECRET_KEY}`
+            }
+          }
+        );
+        return response.data;
+      },
+      country: async ({ country }) => {
+        const response = await axios.get(
+          `https://api.flutterwave.com/v3/banks/${country}`,
+          {
+            headers: {
+              'Authorization': `Bearer ${FLW_SECRET_KEY}`
+            }
+          }
+        );
+        return response.data;
+      },
+      ng: async () => {
+        const response = await axios.get(
+          'https://api.flutterwave.com/v3/banks/NG',
+          {
+            headers: {
+              'Authorization': `Bearer ${FLW_SECRET_KEY}`
+            }
+          }
+        );
+        return response.data;
+      }
+    }
+  };
+}
 
 console.log('✅ Payment Gateway loaded (Flutterwave)');
 console.log('   Flutterwave Key:', FLW_SECRET_KEY ? 'Configured' : 'MISSING');
 console.log('   Platform Subaccount ID:', PLATFORM_SUBACCOUNT_ID ? 'Configured' : 'MISSING');
-
 // ==================== RATE LIMITING ====================
 const paymentInitLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
