@@ -1365,6 +1365,7 @@ router.post('/initialize', protect, paymentInitLimiter, validatePaymentInit, asy
 
 
 // ==================== PAYMENT VERIFICATION ====================
+// ==================== PAYMENT VERIFICATION ====================
 router.get('/verify/:reference', verifyLimiter, validatePaymentVerification, async (req, res) => {
   const { reference } = req.params;
 
@@ -1390,7 +1391,7 @@ router.get('/verify/:reference', verifyLimiter, validatePaymentVerification, asy
   verificationInProgress.set(reference, verificationPromise);
 
   try {
-    console.log('🔍 Verifying payment:', reference);
+    console.log('🔍 Verifying payment with reference:', reference);
 
     let payment = await Payment.findOne({ transactionReference: reference })
       .populate('user', 'name email organizationId');
@@ -1424,10 +1425,25 @@ router.get('/verify/:reference', verifyLimiter, validatePaymentVerification, asy
       });
     }
 
-    // Verify with Flutterwave
-    const response = await withRetry(() => flw.Transaction.verify({ id: reference }));
+    // ===== FIX: Use direct API call with the correct endpoint =====
+    console.log('🔄 Verifying with Flutterwave using reference:', reference);
+
+    // Use the verify_by_reference endpoint
+    const verifyUrl = `https://api.flutterwave.com/v3/transactions/verify_by_reference?tx_ref=${reference}`;
+
+    const response = await withRetry(async () => {
+      const axiosResponse = await axios.get(verifyUrl, {
+        headers: {
+          'Authorization': `Bearer ${FLW_SECRET_KEY}`,
+          'Content-Type': 'application/json'
+        }
+      });
+      console.log('📥 Flutterwave verify response status:', axiosResponse.data.status);
+      return axiosResponse.data;
+    });
+
     if (response.status === 'success' && response.data.status === 'successful') {
-      const amountPaid = response.data.amount; // already in NGN
+      const amountPaid = response.data.amount;
       const expectedAmount = payment.expectedAmount || payment.amount;
       const isPartialPayment = amountPaid < (expectedAmount - 1);
 
@@ -1438,7 +1454,7 @@ router.get('/verify/:reference', verifyLimiter, validatePaymentVerification, asy
         result = await processPartialPayment(payment, amountPaid, reference, false);
         console.log(`⚠️ Partial payment! Paid: ₦${amountPaid}, Expected: ₦${expectedAmount}, Remaining target: ₦${result.remainingTarget}`);
       } else {
-        // Full payment – mark as paid (no income creation here, handled by webhook or separate accounting)
+        // Full payment
         await Payment.findOneAndUpdate(
           { _id: payment._id },
           {
@@ -1479,15 +1495,20 @@ router.get('/verify/:reference', verifyLimiter, validatePaymentVerification, asy
         message: isPartialPayment ? `Partial payment of ₦${amountPaid.toLocaleString()} verified. Outstanding balance: ₦${result?.remainingTarget.toLocaleString()}` : 'Payment verified successfully'
       });
     } else {
+      console.log('⚠️ Payment verification response:', response);
       verificationInProgress.delete(reference);
       resolveVerification();
-      res.status(400).json({ success: false, message: response.message || 'Payment verification failed' });
+      res.status(400).json({
+        success: false,
+        message: response.message || 'Payment verification failed'
+      });
     }
   } catch (error) {
     console.error('Verification error:', error);
+    console.error('Error details:', error.response?.data || error.message);
     verificationInProgress.delete(reference);
     resolveVerification();
-    res.status(500).json({ success: false, message: error.message });
+    res.status(500).json({ success: false, message: error.message || 'Internal server error' });
   }
 });
 
