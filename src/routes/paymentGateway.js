@@ -1030,6 +1030,15 @@ const processPartialPayment = async (originalPayment, amountPaid, reference, isM
 const validatePaymentInit = [
   body('paymentId').isMongoId().withMessage('Invalid payment ID format'),
   body('idempotencyKey').optional().isString().trim().isLength({ min: 10, max: 100 }),
+  body('amount').optional().isNumeric().withMessage('Amount must be a number').custom(value => {
+    if (value && value <= 0) {
+      throw new Error('Amount must be greater than 0');
+    }
+    if (value && value > 10000000) {
+      throw new Error('Amount cannot exceed ₦10,000,000');
+    }
+    return true;
+  }),
   ValidationMiddleware.validate
 ];
 
@@ -1043,8 +1052,8 @@ const validatePaymentVerification = [
 // ==================== PAYMENT INITIALIZATION (FLUTTERWAVE WITH TWO SUBACCOUNTS) ====================
 router.post('/initialize', protect, paymentInitLimiter, validatePaymentInit, async (req, res) => {
   try {
-    const { paymentId, idempotencyKey } = req.body;
-    console.log('📦 Payment initialization:', { paymentId });
+    const { paymentId, idempotencyKey, amount: customAmount } = req.body;
+    console.log('📦 Payment initialization:', { paymentId, customAmount });
 
     const payment = await Payment.findById(paymentId).populate('user', 'name email organizationId');
     if (!payment) {
@@ -1063,9 +1072,19 @@ router.post('/initialize', protect, paymentInitLimiter, validatePaymentInit, asy
         message: 'Platform configuration error. Please contact support.'
       });
     }
+
     const targetOrgAmount = payment.amount;
-    const memberPayAmount = calculateMemberPayAmount(targetOrgAmount);
-    console.log(`💰 Target org amount: ₦${targetOrgAmount} → Member should pay: ₦${memberPayAmount} (includes 2% Flutterwave + 4% platform fees)`);
+    const isPartialPayment = customAmount && customAmount > 0 && customAmount < targetOrgAmount;
+
+    // Use custom amount if provided, otherwise calculate
+    let memberPayAmount;
+    if (customAmount && customAmount > 0) {
+      memberPayAmount = customAmount;
+      console.log(`💰 Custom amount provided: ₦${memberPayAmount} (${isPartialPayment ? 'PARTIAL' : 'FULL'})`);
+    } else {
+      memberPayAmount = calculateMemberPayAmount(targetOrgAmount);
+      console.log(`💰 Calculated amount: ₦${memberPayAmount} (FULL)`);
+    }
 
     if (!validateAmount(memberPayAmount)) {
       return res.status(400).json({ success: false, message: 'Invalid payment amount calculation' });
@@ -1133,7 +1152,10 @@ router.post('/initialize', protect, paymentInitLimiter, validatePaymentInit, asy
         user_id: payment.user._id.toString(),
         target_org_amount: targetOrgAmount,
         member_pay_amount: memberPayAmount,
-        platform_fee: platformFeeAmount
+        platform_fee: platformFeeAmount,
+        is_partial_payment: isPartialPayment,
+        custom_amount: customAmount || null,
+        remaining_balance: isPartialPayment ? targetOrgAmount - customAmount : 0
       }
     };
 
@@ -1144,6 +1166,14 @@ router.post('/initialize', protect, paymentInitLimiter, validatePaymentInit, asy
       payment.paymentUrl = response.data.link;
       payment.expectedAmount = memberPayAmount;
       payment.targetOrgAmount = targetOrgAmount;
+
+      // If partial payment, mark it
+      if (isPartialPayment) {
+        payment.isPartial = true;
+        payment.remainingAmount = targetOrgAmount - customAmount;
+        payment.totalPaidSoFar = 0;
+      }
+
       await payment.save();
 
       return res.status(200).json({
@@ -1152,8 +1182,13 @@ router.post('/initialize', protect, paymentInitLimiter, validatePaymentInit, asy
           authorizationUrl: response.data.link,
           reference: response.data.tx_ref,
           memberPayAmount,
-          targetOrgAmount
-        }
+          targetOrgAmount,
+          isPartialPayment,
+          remainingBalance: isPartialPayment ? targetOrgAmount - customAmount : 0
+        },
+        message: isPartialPayment
+          ? `Partial payment of ₦${memberPayAmount} initialized. Remaining balance: ₦${targetOrgAmount - customAmount}`
+          : 'Payment initialized successfully'
       });
     } else {
       throw new Error(response.message || 'Flutterwave initialization failed');
@@ -1163,7 +1198,6 @@ router.post('/initialize', protect, paymentInitLimiter, validatePaymentInit, asy
     res.status(500).json({ success: false, message: error.message || 'Internal server error' });
   }
 });
-
 // ==================== PAYMENT VERIFICATION ====================
 router.get('/verify/:reference', verifyLimiter, validatePaymentVerification, async (req, res) => {
   const { reference } = req.params;
