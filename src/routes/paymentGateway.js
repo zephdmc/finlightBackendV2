@@ -1499,7 +1499,7 @@ router.get('/flutterwave/banks', protect, async (req, res) => {
 
     // Try different possible method names
     if (typeof flw.Bank.getBanks === 'function') {
-      response = await flw.Bank.getBanks({ country: 'NG' });
+      response = await flw.Bank.get_banks({ country: 'NG' });
     } else if (typeof flw.Bank.list === 'function') {
       response = await flw.Bank.list({ country: 'NG' });
     } else if (typeof flw.Bank.country === 'function') {
