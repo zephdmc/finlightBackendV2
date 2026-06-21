@@ -787,6 +787,8 @@ const { sendOrganizationWelcomeEmail } = require('../services/emailService');
 const User = require('../models/User');
 const mongoose = require('mongoose');
 const Flutterwave = require('flutterwave-node-v3');
+const axios = require('axios'); // Add this
+
 
 // Initialize Flutterwave SDK
 const flw = new Flutterwave(process.env.FLW_PUBLIC_KEY, process.env.FLW_SECRET_KEY);
@@ -830,23 +832,114 @@ class OrganizationController {
   async getFlutterwaveBankCode(bankName) {
     try {
       console.log('🔍 Fetching bank code from Flutterwave for:', bankName);
-      const response = await flw.Bank.ngn({ country: 'NG' }); // Returns list of banks
-      if (response.status === 'success') {
-        let bank = response.data.find(b =>
+
+      // Try direct API call first (most reliable)
+      const response = await axios.get('https://api.flutterwave.com/v3/banks/NG', {
+        headers: {
+          'Authorization': `Bearer ${process.env.FLW_SECRET_KEY}`,
+          'Content-Type': 'application/json'
+        },
+        timeout: 10000
+      });
+
+      if (response.data.status === 'success' && response.data.data) {
+        const banks = response.data.data;
+        console.log(`✅ Fetched ${banks.length} banks from Flutterwave`);
+
+        // Try exact match first
+        let bank = banks.find(b =>
           b.name.toLowerCase() === bankName.toLowerCase()
         );
+
+        // If not found, try partial match
         if (!bank) {
-          bank = response.data.find(b =>
+          bank = banks.find(b =>
             b.name.toLowerCase().includes(bankName.toLowerCase()) ||
             bankName.toLowerCase().includes(b.name.toLowerCase())
           );
         }
-        console.log('Bank found:', bank ? bank.name : 'Not found');
-        return bank ? bank.code : null;
+
+        if (bank) {
+          console.log('✅ Bank found:', bank.name, 'Code:', bank.code);
+          return bank.code;
+        }
+
+        console.log('❌ Bank not found in Flutterwave list');
+        return null;
       }
-      return null;
+
+      // Fallback to SDK method if API call fails
+      console.log('🔄 Falling back to SDK method...');
+      const sdkResponse = await flw.Bank.get_banks({ country: 'NG' });
+      // Try different SDK method names if needed
+      if (!sdkResponse || sdkResponse.status !== 'success') {
+        const sdkResponse2 = await flw.Bank.list({ country: 'NG' });
+        if (sdkResponse2 && sdkResponse2.status === 'success') {
+          const banks = sdkResponse2.data;
+          let bank = banks.find(b => b.name.toLowerCase() === bankName.toLowerCase());
+          if (!bank) {
+            bank = banks.find(b =>
+              b.name.toLowerCase().includes(bankName.toLowerCase()) ||
+              bankName.toLowerCase().includes(b.name.toLowerCase())
+            );
+          }
+          return bank ? bank.code : null;
+        }
+        return null;
+      }
+
+      const banks = sdkResponse.data;
+      let bank = banks.find(b => b.name.toLowerCase() === bankName.toLowerCase());
+      if (!bank) {
+        bank = banks.find(b =>
+          b.name.toLowerCase().includes(bankName.toLowerCase()) ||
+          bankName.toLowerCase().includes(b.name.toLowerCase())
+        );
+      }
+      return bank ? bank.code : null;
+
     } catch (error) {
-      console.error('Error fetching Flutterwave banks:', error);
+      console.error('Error fetching Flutterwave banks:', error.message);
+
+      // Hardcoded fallback for common banks
+      const bankCodeMap = {
+        'access bank': '044',
+        'citibank': '023',
+        'ecobank': '050',
+        'fidelity bank': '070',
+        'first bank': '011',
+        'first city monument bank': '214',
+        'guaranty trust bank': '058',
+        'gtbank': '058',
+        'heritage bank': '030',
+        'keystone bank': '082',
+        'polaris bank': '076',
+        'providus bank': '101',
+        'stanbic ibtc bank': '221',
+        'standard chartered bank': '068',
+        'sterling bank': '232',
+        'suntrust bank': '100',
+        'titan trust bank': '102',
+        'union bank': '032',
+        'united bank for africa': '033',
+        'uba': '033',
+        'unity bank': '215',
+        'wema bank': '035',
+        'zenith bank': '057',
+        'opay': '100004',  // Add Opay
+        'paycom': '100004',
+        'opal': '100004'
+      };
+
+      const normalizedName = bankName.toLowerCase().trim();
+      const code = bankCodeMap[normalizedName];
+
+      if (code) {
+        console.log('✅ Using fallback bank code for:', bankName, 'Code:', code);
+        return code;
+      }
+
+      console.log('❌ No fallback code found for:', bankName);
       return null;
     }
   }
@@ -861,9 +954,9 @@ class OrganizationController {
         account_number: accountNumber,
         business_name: businessName,
         business_email: email,
-        business_mobile: phone || '08012345678', // fallback
-        split_type: 'flat', // we will use flat split per transaction
-        split_value: 0, // default; actual split set at payment time
+        business_mobile: phone || '08012345678',
+        split_type: 'flat',
+        split_value: 0,
         country: 'NG'
       };
 
@@ -873,8 +966,8 @@ class OrganizationController {
       if (response.status === 'success') {
         return {
           success: true,
-          subaccountId: response.data.id,          // numeric ID used in splits
-          subaccountCode: response.data.subaccount_id, // alphanumeric code
+          subaccountId: response.data.id,
+          subaccountCode: response.data.subaccount_id,
           bankName: response.data.bank_name,
           accountNumber: response.data.account_number,
           isVerified: true
@@ -1143,139 +1236,147 @@ class OrganizationController {
  * @route PUT /api/organizations/bank-details
  * @access Private/Admin
  */
-async updateBankDetails(req, res, next) {
-  try {
-    console.log('=== UPDATE BANK DETAILS (Flutterwave) ===');
-    const organizationId = req.user?.organizationId;
-    const { bankName, accountNumber, accountName } = req.body;
+  async updateBankDetails(req, res, next) {
+    try {
+      console.log('=== UPDATE BANK DETAILS (Flutterwave) ===');
+      const organizationId = req.user?.organizationId;
+      const { bankName, bankCode, accountNumber, accountName } = req.body;
 
-    // Validate required fields
-    if (!organizationId) {
-      return res.status(400).json({ success: false, message: 'Organization ID not found for this user' });
-    }
-    if (!bankName || !accountNumber) {
-      return res.status(400).json({ success: false, message: 'Bank name and account number are required' });
-    }
+      console.log('Request body:', { bankName, bankCode, accountNumber, accountName });
 
-    // Basic format validation
-    if (!/^[a-zA-Z\s]+$/.test(bankName)) {
-      return res.status(400).json({ success: false, message: 'Bank name should contain only letters and spaces' });
-    }
-    if (!/^\d{10}$/.test(accountNumber)) {
-      return res.status(400).json({ success: false, message: 'Account number must be exactly 10 digits' });
-    }
+      // Validate required fields
+      if (!organizationId) {
+        return res.status(400).json({ success: false, message: 'Organization ID not found for this user' });
+      }
+      if (!bankName || !accountNumber) {
+        return res.status(400).json({ success: false, message: 'Bank name and account number are required' });
+      }
 
-    const organization = await Organization.findById(organizationId);
-    if (!organization) {
-      return res.status(404).json({ success: false, message: 'Organization not found' });
-    }
+      // Basic format validation
+      if (!/^[a-zA-Z\s]+$/.test(bankName)) {
+        return res.status(400).json({ success: false, message: 'Bank name should contain only letters and spaces' });
+      }
+      if (!/^\d{10}$/.test(accountNumber)) {
+        return res.status(400).json({ success: false, message: 'Account number must be exactly 10 digits' });
+      }
 
-    // Check if subaccount already exists
-    if (organization.flutterwave?.subaccountId) {
-      return res.status(400).json({
-        success: false,
-        message: 'Subaccount already exists for this organization. Contact support to update bank details.'
-      });
-    }
+      const organization = await Organization.findById(organizationId);
+      if (!organization) {
+        return res.status(404).json({ success: false, message: 'Organization not found' });
+      }
 
-    const admin = await User.findOne({ organizationId, role: 'admin' });
-    if (!admin) {
-      return res.status(404).json({ success: false, message: 'Admin not found for this organization' });
-    }
+      // Check if subaccount already exists
+      if (organization.flutterwave?.subaccountId) {
+        return res.status(400).json({
+          success: false,
+          message: 'Subaccount already exists for this organization. Contact support to update bank details.'
+        });
+      }
 
-    // Get Flutterwave bank code with retry (optional)
-    let bankCode = null;
-    let retries = 3;
-    while (retries > 0 && !bankCode) {
-      bankCode = await this.getFlutterwaveBankCode(bankName);
-      if (!bankCode) {
-        retries--;
-        if (retries > 0) {
-          console.log(`Bank code fetch failed, retrying... (${3 - retries}/3)`);
-          await new Promise(resolve => setTimeout(resolve, 1000));
+      const admin = await User.findOne({ organizationId, role: 'admin' });
+      if (!admin) {
+        return res.status(404).json({ success: false, message: 'Admin not found for this organization' });
+      }
+
+      // Use the bankCode from frontend if provided, otherwise fetch it
+      let finalBankCode = bankCode;
+
+      if (!finalBankCode) {
+        console.log('No bank code provided, fetching from Flutterwave...');
+        // Get Flutterwave bank code with retry
+        let retries = 3;
+        while (retries > 0 && !finalBankCode) {
+          finalBankCode = await this.getFlutterwaveBankCode(bankName);
+          if (!finalBankCode) {
+            retries--;
+            if (retries > 0) {
+              console.log(`Bank code fetch failed, retrying... (${3 - retries}/3)`);
+              await new Promise(resolve => setTimeout(resolve, 1000));
+            }
+          }
+        }
+      } else {
+        console.log('Using bank code from frontend:', finalBankCode);
+      }
+
+      if (!finalBankCode) {
+        return res.status(400).json({
+          success: false,
+          message: `Could not find bank code for "${bankName}". Please check the bank name. Valid banks: Access Bank, Zenith Bank, GTBank, Opay, etc.`
+        });
+      }
+
+      // Create Flutterwave subaccount with retry logic
+      let subaccountResult = null;
+      let createRetries = 3;
+      let lastError = null;
+
+      while (createRetries > 0 && !subaccountResult?.success) {
+        subaccountResult = await this.createFlutterwaveSubaccount(
+          organization.name,
+          finalBankCode,
+          accountNumber,
+          admin.email,
+          admin.phone || null
+        );
+        if (!subaccountResult.success) {
+          lastError = subaccountResult.error;
+          createRetries--;
+          if (createRetries > 0) {
+            console.log(`Subaccount creation failed, retrying... (${3 - createRetries}/3): ${lastError}`);
+            await new Promise(resolve => setTimeout(resolve, 2000));
+          }
         }
       }
-    }
 
-    if (!bankCode) {
-      return res.status(400).json({
-        success: false,
-        message: `Could not find bank code for "${bankName}". Please check the bank name. Valid banks: Access Bank, Zenith Bank, GTBank, etc.`
-      });
-    }
-
-    // Create Flutterwave subaccount with retry logic
-    let subaccountResult = null;
-    let createRetries = 3;
-    let lastError = null;
-
-    while (createRetries > 0 && !subaccountResult?.success) {
-      subaccountResult = await this.createFlutterwaveSubaccount(
-        organization.name,
-        bankCode,
-        accountNumber,
-        admin.email,
-        admin.phone || null
-      );
       if (!subaccountResult.success) {
-        lastError = subaccountResult.error;
-        createRetries--;
-        if (createRetries > 0) {
-          console.log(`Subaccount creation failed, retrying... (${3 - createRetries}/3): ${lastError}`);
-          await new Promise(resolve => setTimeout(resolve, 2000));
-        }
+        console.error('Flutterwave subaccount creation failed after retries:', lastError);
+        return res.status(400).json({
+          success: false,
+          message: `Failed to create payment subaccount: ${lastError}. Please verify bank details and try again.`
+        });
       }
-    }
 
-    if (!subaccountResult.success) {
-      // Log full error for debugging
-      console.error('Flutterwave subaccount creation failed after retries:', lastError);
-      return res.status(400).json({
-        success: false,
-        message: `Failed to create payment subaccount: ${lastError}. Please verify bank details and try again.`
-      });
-    }
-
-    // Save subaccount details to organization
-    organization.flutterwave = {
-      subaccountId: subaccountResult.subaccountId,
-      subaccountCode: subaccountResult.subaccountCode,
-      bankName: bankName,
-      accountNumber: accountNumber,
-      accountName: accountName || organization.name,
-      subaccountStatus: 'active',
-      subaccountCreatedAt: new Date(),
-      subaccountVerified: subaccountResult.isVerified
-    };
-    organization.updatedAt = new Date();
-    await organization.save();
-
-    console.log(`✅ Flutterwave subaccount created: ${subaccountResult.subaccountId} for ${organization.name}`);
-
-    res.status(200).json({
-      success: true,
-      data: {
+      // Save subaccount details to organization
+      organization.flutterwave = {
         subaccountId: subaccountResult.subaccountId,
         subaccountCode: subaccountResult.subaccountCode,
-        bankName,
-        accountNumber,
+        bankName: bankName,
+        bankCode: finalBankCode,
+        accountNumber: accountNumber,
         accountName: accountName || organization.name,
-        isVerified: subaccountResult.isVerified,
-        subaccountStatus: 'active'
-      },
-      message: 'Bank details updated and Flutterwave subaccount created successfully!'
-    });
+        subaccountStatus: 'active',
+        subaccountCreatedAt: new Date(),
+        subaccountVerified: subaccountResult.isVerified
+      };
+      organization.updatedAt = new Date();
+      await organization.save();
 
-  } catch (error) {
-    console.error('Error updating bank details:', error);
-    // Send a generic error to client, but log the full error
-    res.status(500).json({
-      success: false,
-      message: 'An unexpected error occurred while updating bank details. Please try again later.'
-    });
+      console.log(`✅ Flutterwave subaccount created: ${subaccountResult.subaccountId} for ${organization.name}`);
+
+      res.status(200).json({
+        success: true,
+        data: {
+          subaccountId: subaccountResult.subaccountId,
+          subaccountCode: subaccountResult.subaccountCode,
+          bankName,
+          bankCode: finalBankCode,
+          accountNumber,
+          accountName: accountName || organization.name,
+          isVerified: subaccountResult.isVerified,
+          subaccountStatus: 'active'
+        },
+        message: 'Bank details updated and Flutterwave subaccount created successfully!'
+      });
+
+    } catch (error) {
+      console.error('Error updating bank details:', error);
+      res.status(500).json({
+        success: false,
+        message: 'An unexpected error occurred while updating bank details. Please try again later.'
+      });
+    }
   }
-}
-
   /**
    * Get Flutterwave subaccount status
    */
