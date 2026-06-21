@@ -1198,6 +1198,13 @@ router.post('/initialize', protect, paymentInitLimiter, validatePaymentInit, asy
     if (payment.status === 'paid') {
       return res.status(400).json({ success: false, message: 'Payment already completed' });
     }
+    // ===== ADD THIS EXPIRY CHECK =====
+    if (payment.createdAt < new Date(Date.now() - 24 * 60 * 60 * 1000)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Payment request has expired (24 hours). Please create a new one.'
+      });
+    }
     if (!PLATFORM_SUBACCOUNT_ID) {
       console.error('❌ PLATFORM_SUBACCOUNT_ID is not set in environment');
       return res.status(500).json({
@@ -1350,6 +1357,8 @@ router.post('/initialize', protect, paymentInitLimiter, validatePaymentInit, asy
     res.status(500).json({ success: false, message: error.message || 'Internal server error' });
   }
 });
+
+
 // ==================== PAYMENT VERIFICATION ====================
 router.get('/verify/:reference', verifyLimiter, validatePaymentVerification, async (req, res) => {
   const { reference } = req.params;
@@ -1489,8 +1498,21 @@ router.post('/webhook', webhookLimiter, async (req, res) => {
     const event = req.body;
     console.log('📨 Webhook received:', event.event);
 
+
+
+
+
     if (event.event === 'charge.completed' && event.data.status === 'successful') {
       const { tx_ref, amount } = event.data;
+      // Check if payment was already processed
+      const existingPayment = await Payment.findOne({
+        transactionReference: tx_ref,
+        status: 'paid'
+      });
+      if (existingPayment) {
+        console.log('⚠️ Payment already processed, ignoring duplicate webhook');
+        return res.status(200).json({ success: true });
+      }
       const amountPaid = amount; // already in NGN
 
       const payment = await Payment.findOne({
