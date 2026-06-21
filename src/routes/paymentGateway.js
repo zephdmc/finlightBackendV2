@@ -1051,7 +1051,14 @@ const validatePaymentVerification = [
 
 // ==================== PAYMENT INITIALIZATION (FLUTTERWAVE WITH TWO SUBACCOUNTS) ====================
 router.post('/initialize', protect, paymentInitLimiter, validatePaymentInit, async (req, res) => {
+
   try {
+    console.log('🔍 Flutterwave SDK status:', {
+      hasFlw: !!flw,
+      hasPayment: !!(flw?.Payment),
+      hasInitiate: typeof flw?.Payment?.initiate === 'function'
+    });
+
     const { paymentId, idempotencyKey, amount: customAmount } = req.body;
     console.log('📦 Payment initialization:', { paymentId, customAmount });
 
