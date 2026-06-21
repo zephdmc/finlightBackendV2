@@ -839,13 +839,13 @@ const withRetry = async (fn, maxRetries = 3, baseDelay = 1000) => {
       return await fn();
     } catch (error) {
       lastError = error;
-      const isRetryable = error.response?.status >= 500 || 
-                          error.code === 'ECONNRESET' || 
-                          error.message?.includes('network') ||
-                          error.message?.includes('timeout');
-      
+      const isRetryable = error.response?.status >= 500 ||
+        error.code === 'ECONNRESET' ||
+        error.message?.includes('network') ||
+        error.message?.includes('timeout');
+
       if (!isRetryable || attempt === maxRetries - 1) throw error;
-      
+
       const delay = baseDelay * Math.pow(2, attempt);
       console.log(`Flutterwave API call failed, retrying in ${delay}ms... (${attempt + 1}/${maxRetries})`);
       await new Promise(resolve => setTimeout(resolve, delay));
@@ -870,11 +870,11 @@ const verificationInProgress = new Map();
  */
 const calculateMemberPayAmount = (targetOrganizationAmount) => {
   if (!targetOrganizationAmount || targetOrganizationAmount <= 0) return 0;
-  
+
   // Initial calculation
   let memberPays = targetOrganizationAmount / 0.94;
   memberPays = Math.ceil(memberPays);
-  
+
   // Verify net to organisation is at least target (with tolerance of 1 NGN)
   let netToOrg = calculateNetToOrganization(memberPays).netToOrg;
   let iterations = 0;
@@ -883,7 +883,7 @@ const calculateMemberPayAmount = (targetOrganizationAmount) => {
     netToOrg = calculateNetToOrganization(memberPays).netToOrg;
     iterations++;
   }
-  
+
   return memberPays;
 };
 /**
@@ -897,21 +897,21 @@ const calculateNetToOrganization = (amountPaid, targetOrgAmount = null) => {
   let platformFee = amountPaid * 0.04;
   let totalFees = flutterwaveFee + platformFee;
   let netToOrg = amountPaid - totalFees;
-  
+
   let roundedNet = Math.round(netToOrg);
   let roundedFlutterwave = Math.round(flutterwaveFee);
   let roundedPlatform = Math.round(platformFee);
   let roundedTotalFees = roundedFlutterwave + roundedPlatform;
-  
+
   // If a target is provided and net differs by more than 1 NGN, adjust net to match target
   if (targetOrgAmount && Math.abs(roundedNet - targetOrgAmount) > 1) {
     roundedNet = targetOrgAmount;
     console.log(`Fee adjustment: netToOrg changed from ${Math.round(netToOrg)} to ${targetOrgAmount} (difference: ${targetOrgAmount - Math.round(netToOrg)})`);
   }
-  
+
   // Safety clamp
   if (roundedNet < 0) roundedNet = 0;
-  
+
   return {
     amountPaid,
     flutterwaveFee: roundedFlutterwave,
@@ -1458,6 +1458,64 @@ router.all('/webhook-test', (req, res) => {
     message: 'Test webhook endpoint works!',
     method: req.method
   });
+});
+
+router.post('/organizations/resolve-account', protect, async (req, res) => {
+  try {
+    const { accountNumber, bankCode } = req.body;
+
+    const response = await flw.Misc.verify_Account({
+      account_number: accountNumber,
+      account_bank: bankCode
+    });
+
+    if (response.status === 'success') {
+      return res.json({
+        success: true,
+        accountName: response.data.account_name
+      });
+    }
+
+    return res.status(400).json({
+      success: false,
+      message: 'Unable to verify account'
+    });
+  } catch (error) {
+    console.error('Account verification error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Account verification failed'
+    });
+  }
+});
+
+
+// GET /api/flutterwave/banks
+router.get('/flutterwave/banks', protect, async (req, res) => {
+  try {
+    // Using Flutterwave's get banks endpoint
+    const response = await flw.Bank.ng({
+      country: 'NG'
+    });
+
+    if (response.status === 'success') {
+      return res.json({
+        success: true,
+        data: response.data
+      });
+    }
+
+    return res.status(400).json({
+      success: false,
+      message: 'Unable to fetch banks'
+    });
+  } catch (error) {
+    console.error('Error fetching banks:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch banks'
+    });
+  }
 });
 
 // ==================== HEALTH CHECK ====================
