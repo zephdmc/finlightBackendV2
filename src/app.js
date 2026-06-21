@@ -23,6 +23,9 @@ const errorHandler = require('./middleware/errorHandler');
 const adminRoutes = require('./routes/adminRoutes');
 const app = express();
 
+app.set('trust proxy', 1); // Trust first proxy (for Render.com)
+
+
 // ==================== SECURITY MIDDLEWARE ====================
 
 // 1. Helmet - Sets secure HTTP headers
