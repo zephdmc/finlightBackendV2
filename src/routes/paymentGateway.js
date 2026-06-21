@@ -781,7 +781,12 @@ const FLW_SECRET_KEY = process.env.FLW_SECRET_KEY;
 const FLW_PUBLIC_KEY = process.env.FLW_PUBLIC_KEY;
 const FLW_ENCRYPTION_KEY = process.env.FLW_ENCRYPTION_KEY;
 const FLW_WEBHOOK_SECRET = process.env.FLW_WEBHOOK_SECRET;
-const FRONTEND_URL = process.env.FRONTEND_URL || 'https://finlightv2.web.app';
+
+// ===== FIX: Extract first URL from the list =====
+const rawFrontendUrl = process.env.FRONTEND_URL || 'https://finlightv2.web.app';
+const FRONTEND_URL = rawFrontendUrl.split(',')[0].trim();
+console.log('📌 Using FRONTEND_URL:', FRONTEND_URL);
+// const FRONTEND_URL = process.env.FRONTEND_URL || 'https://finlightv2.web.app';
 
 // Platform subaccount ID (where your 4% platform fee goes)
 const PLATFORM_SUBACCOUNT_ID = process.env.PLATFORM_SUBACCOUNT_ID;
