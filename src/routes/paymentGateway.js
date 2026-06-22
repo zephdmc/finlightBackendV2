@@ -862,11 +862,14 @@ try {
       verify_Account: async ({ account_number, account_bank }) => {
         console.log('🔄 Using direct API call for account verification...');
         try {
+          // Ensure bank code is a number
+          const numericBankCode = Number(account_bank);
+
           const response = await axios.post(
             'https://api.flutterwave.com/v3/accounts/resolve',
             {
               account_number: account_number,
-              account_bank: account_bank
+              account_bank: numericBankCode  // ← Send as number
             },
             {
               headers: {
@@ -1724,6 +1727,7 @@ router.all('/webhook-test', (req, res) => {
 });
 
 // ==================== RESOLVE ACCOUNT (FLUTTERWAVE) ====================
+// ==================== RESOLVE ACCOUNT (FLUTTERWAVE) ====================
 router.post('/organizations/resolve-account', protect, async (req, res) => {
   try {
     const { accountNumber, bankCode } = req.body;
@@ -1745,14 +1749,23 @@ router.post('/organizations/resolve-account', protect, async (req, res) => {
       });
     }
 
-    // ===== USE DIRECT API CALL =====
+    // Convert bank code to number if it's a string
+    const numericBankCode = Number(bankCode);
+    if (isNaN(numericBankCode)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid bank code format'
+      });
+    }
+
+    // ===== USE DIRECT API CALL WITH NUMERIC BANK CODE =====
     const axios = require('axios');
 
     const response = await axios.post(
       'https://api.flutterwave.com/v3/accounts/resolve',
       {
         account_number: accountNumber,
-        account_bank: bankCode
+        account_bank: numericBankCode  // ← Send as number
       },
       {
         headers: {
@@ -1780,18 +1793,10 @@ router.post('/organizations/resolve-account', protect, async (req, res) => {
   } catch (error) {
     console.error('❌ Account verification error:', error.response?.data || error.message);
 
-    // Check for specific error types
     if (error.response?.data?.status === 'error') {
       return res.status(400).json({
         success: false,
         message: error.response.data.message || 'Account verification failed'
-      });
-    }
-
-    if (error.code === 'ECONNABORTED') {
-      return res.status(408).json({
-        success: false,
-        message: 'Request timed out. Please try again.'
       });
     }
 
@@ -1801,7 +1806,6 @@ router.post('/organizations/resolve-account', protect, async (req, res) => {
     });
   }
 });
-
 
 // GET /api/flutterwave/banks
 // GET /api/flutterwave/banks
