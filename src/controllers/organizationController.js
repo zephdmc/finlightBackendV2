@@ -949,19 +949,26 @@ class OrganizationController {
    */
   async createFlutterwaveSubaccount(businessName, bankCode, accountNumber, email, phone = null) {
     try {
+      // IMPORTANT: Only include currency if it's a valid NGN bank
       const payload = {
-        account_bank: bankCode,
-        account_number: accountNumber,
+        account_bank: String(bankCode),  // Ensure it's a string
+        account_number: String(accountNumber),
         business_name: businessName,
         business_email: email,
         business_mobile: phone || '08012345678',
-        split_type: 'flat',
-        split_value: 0,
-        country: 'NG',
-        currency: 'NGN'  // ← ADD THIS - sets currency to Naira
+        split_type: 'percentage',  // ← CHANGE from 'flat' to 'percentage'
+        split_value: 94,           // ← Organization keeps 94%
+        country: 'NG'
       };
 
-      console.log('📤 Creating Flutterwave subaccount:', { businessName, bankCode, accountNumber });
+      // Only add currency if the bank code is a known Nigerian bank
+      // NGN is the default for Nigerian banks
+      const nigerianBankCodes = ['044', '058', '011', '070', '033', '057', '221', '232', '050', '023', '214', '030', '082', '076', '101', '068', '100', '102', '032', '215', '035'];
+      if (nigerianBankCodes.includes(String(bankCode))) {
+        payload.currency = 'NGN';
+      }
+
+      console.log('📤 Creating Flutterwave subaccount:', payload);
       const response = await flw.Subaccount.create(payload);
 
       if (response.status === 'success') {
