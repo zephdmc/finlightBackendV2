@@ -957,7 +957,8 @@ class OrganizationController {
         business_mobile: phone || '08012345678',
         split_type: 'flat',
         split_value: 0,
-        country: 'NG'
+        country: 'NG',
+        currency: 'NGN'  // ← ADD THIS - sets currency to Naira
       };
 
       console.log('📤 Creating Flutterwave subaccount:', { businessName, bankCode, accountNumber });
