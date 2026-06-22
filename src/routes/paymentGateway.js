@@ -1724,64 +1724,13 @@ router.all('/webhook-test', (req, res) => {
 
 // ==================== RESOLVE ACCOUNT (FLUTTERWAVE) ====================
 // ==================== RESOLVE ACCOUNT (FLUTTERWAVE SDK) ====================
-router.post('/organizations/resolve-account', protect, async (req, res) => {
-  try {
-    const { accountNumber, bankCode } = req.body;
-
-    console.log('🔍 Resolving account with SDK:', { accountNumber, bankCode });
-
-    // Validate inputs
-    if (!accountNumber || !bankCode) {
-      return res.status(400).json({
-        success: false,
-        message: 'Account number and bank code are required'
-      });
-    }
-
-    if (!/^\d{10}$/.test(accountNumber)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Account number must be exactly 10 digits'
-      });
-    }
-
-    // ===== USE SDK METHOD (was working before) =====
-    const response = await flw.Misc.verify_Account({
-      account_number: accountNumber,
-      account_bank: String(bankCode)  // Ensure it's a string
-    });
-
-    console.log('📥 SDK Account resolution response:', response);
-
-    if (response.status === 'success') {
-      return res.json({
-        success: true,
-        accountName: response.data.account_name
-      });
-    } else {
-      return res.status(400).json({
-        success: false,
-        message: response.message || 'Unable to verify account'
-      });
-    }
-
-  } catch (error) {
-    console.error('❌ Account verification error:', error.response?.data || error.message);
-
-    // Check if SDK fallback is being used
-    if (error.message?.includes('direct API call')) {
-      return res.status(400).json({
-        success: false,
-        message: 'Bank not supported for verification. Please use a supported bank.'
-      });
-    }
-
-    res.status(500).json({
-      success: false,
-      message: 'Account verification failed. Please try again later.'
-    });
-  }
-});
+// In your fallbackBanks
+const fallbackBanks = [
+  { name: 'Access Bank', code: '044' },
+  { name: 'Zenith Bank', code: '057' },  // ← Correct code
+  { name: 'Guaranty Trust Bank', code: '058' },
+  // ... etc
+];
 
 // GET /api/flutterwave/banks
 // GET /api/flutterwave/banks
