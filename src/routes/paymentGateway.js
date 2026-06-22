@@ -1724,13 +1724,110 @@ router.all('/webhook-test', (req, res) => {
 
 // ==================== RESOLVE ACCOUNT (FLUTTERWAVE) ====================
 // ==================== RESOLVE ACCOUNT (FLUTTERWAVE SDK) ====================
-// In your fallbackBanks
-const fallbackBanks = [
-  { name: 'Access Bank', code: '044' },
-  { name: 'Zenith Bank', code: '057' },  // ← Correct code
-  { name: 'Guaranty Trust Bank', code: '058' },
-  // ... etc
-];
+// ==================== RESOLVE ACCOUNT (FLUTTERWAVE) ====================
+router.post('/organizations/resolve-account', protect, async (req, res) => {
+  try {
+    const { accountNumber, bankCode } = req.body;
+
+    console.log('🔍 Resolving account:', { accountNumber, bankCode, type: typeof bankCode });
+
+    // Validate inputs
+    if (!accountNumber || !bankCode) {
+      return res.status(400).json({
+        success: false,
+        message: 'Account number and bank code are required'
+      });
+    }
+
+    if (!/^\d{10}$/.test(accountNumber)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Account number must be exactly 10 digits'
+      });
+    }
+
+    // ===== TRY WITH BOTH STRING AND NUMBER FORMATS =====
+    const cleanBankCode = String(bankCode).trim();
+
+    // Try with string format first (SDK style)
+    try {
+      console.log(`🔄 Trying SDK-style verification with code: ${cleanBankCode}`);
+      const response = await flw.Misc.verify_Account({
+        account_number: accountNumber,
+        account_bank: cleanBankCode
+      });
+
+      if (response.status === 'success') {
+        return res.json({
+          success: true,
+          accountName: response.data.account_name
+        });
+      }
+      // If SDK returns error, fall through to direct API
+    } catch (sdkError) {
+      console.log('SDK verification failed, trying direct API...', sdkError.message);
+    }
+
+    // ===== FALLBACK: Direct API with correct format =====
+    // Flutterwave expects the bank code as a number for this endpoint
+    const numericBankCode = parseInt(cleanBankCode, 10);
+
+    if (isNaN(numericBankCode)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid bank code format'
+      });
+    }
+
+    console.log(`🔄 Using direct API with numeric code: ${numericBankCode}`);
+
+    const response = await axios.post(
+      'https://api.flutterwave.com/v3/accounts/resolve',
+      {
+        account_number: accountNumber,
+        account_bank: numericBankCode  // Send as number
+      },
+      {
+        headers: {
+          'Authorization': `Bearer ${FLW_SECRET_KEY}`,
+          'Content-Type': 'application/json'
+        },
+        timeout: 15000
+      }
+    );
+
+    console.log('📥 Account resolution response:', response.data);
+
+    if (response.data.status === 'success') {
+      return res.json({
+        success: true,
+        accountName: response.data.data.account_name
+      });
+    } else {
+      return res.status(400).json({
+        success: false,
+        message: response.data.message || 'Unable to verify account'
+      });
+    }
+
+  } catch (error) {
+    console.error('❌ Account verification error:', error.response?.data || error.message);
+
+    const errorMsg = error.response?.data?.message || error.message;
+
+    if (errorMsg.includes('only 044') || errorMsg.includes('must be numeric')) {
+      return res.status(400).json({
+        success: false,
+        message: 'Bank verification not available. Please enter account name manually or try a different bank.'
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      message: 'Account verification failed. Please try again later.'
+    });
+  }
+});
 
 // GET /api/flutterwave/banks
 // GET /api/flutterwave/banks
