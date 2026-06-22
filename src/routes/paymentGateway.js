@@ -1262,25 +1262,38 @@ router.post('/initialize', protect, paymentInitLimiter, validatePaymentInit, asy
       });
     }
 
+
+
     // Calculate platform fee amount (4% of memberPayAmount)
     const platformFeeAmount = Math.round(memberPayAmount * 0.04);
+    // Organization gets 94% (memberPayAmount - 4% platform fee)
+    const organizationAmount = memberPayAmount - platformFeeAmount;
 
     // Generate unique transaction reference
     const uniqueRef = `PAY-${payment._id}-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
 
-    // Split configuration: organization receives target amount, platform receives 4% fee
+    // ===== FIXED: Split configuration =====
     const subaccounts = [
       {
         id: organizationSubaccountId,
         transaction_split_type: 'flat',
-        transaction_split_value: targetOrgAmount
+        transaction_split_value: organizationAmount  // Organization gets 94%
       },
       {
         id: PLATFORM_SUBACCOUNT_ID,
         transaction_split_type: 'flat',
-        transaction_split_value: platformFeeAmount
+        transaction_split_value: platformFeeAmount   // Platform gets 4%
       }
     ];
+
+    console.log('📤 Split configuration:', {
+      organizationSubaccount: organizationSubaccountId,
+      organizationGets: organizationAmount,
+      platformSubaccount: PLATFORM_SUBACCOUNT_ID,
+      platformGets: platformFeeAmount,
+      memberPays: memberPayAmount
+    });
+
 
     const payload = {
       tx_ref: uniqueRef,
