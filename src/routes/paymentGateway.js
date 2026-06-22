@@ -855,21 +855,18 @@ try {
         return response.data;
       }
     },
-
-
-
+    // In the fallback section, update Misc:
     Misc: {
       verify_Account: async ({ account_number, account_bank }) => {
         console.log('🔄 Using direct API call for account verification...');
         try {
-          // Ensure bank code is a number
-          const numericBankCode = Number(account_bank);
+          const cleanBankCode = String(account_bank).trim();
 
           const response = await axios.post(
             'https://api.flutterwave.com/v3/accounts/resolve',
             {
               account_number: account_number,
-              account_bank: numericBankCode  // ← Send as number
+              account_bank: cleanBankCode
             },
             {
               headers: {
@@ -884,12 +881,7 @@ try {
           throw error;
         }
       }
-    }
-
-
-
-
-    ,
+    },
     Bank: {
       get_banks: async ({ country }) => {
         const response = await axios.get(
@@ -1727,7 +1719,6 @@ router.all('/webhook-test', (req, res) => {
 });
 
 // ==================== RESOLVE ACCOUNT (FLUTTERWAVE) ====================
-// ==================== RESOLVE ACCOUNT (FLUTTERWAVE) ====================
 router.post('/organizations/resolve-account', protect, async (req, res) => {
   try {
     const { accountNumber, bankCode } = req.body;
@@ -1749,30 +1740,26 @@ router.post('/organizations/resolve-account', protect, async (req, res) => {
       });
     }
 
-    // Convert bank code to number if it's a string
-    const numericBankCode = Number(bankCode);
-    if (isNaN(numericBankCode)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid bank code format'
-      });
-    }
-
-    // ===== USE DIRECT API CALL WITH NUMERIC BANK CODE =====
+    // ===== USE DIRECT API CALL INSTEAD OF SDK =====
     const axios = require('axios');
+
+    // Convert to string and clean
+    const cleanBankCode = String(bankCode).trim();
+
+    console.log(`🔄 Calling Flutterwave API with bank code: ${cleanBankCode}`);
 
     const response = await axios.post(
       'https://api.flutterwave.com/v3/accounts/resolve',
       {
         account_number: accountNumber,
-        account_bank: numericBankCode  // ← Send as number
+        account_bank: cleanBankCode
       },
       {
         headers: {
           'Authorization': `Bearer ${FLW_SECRET_KEY}`,
           'Content-Type': 'application/json'
         },
-        timeout: 10000
+        timeout: 15000
       }
     );
 
@@ -1793,6 +1780,16 @@ router.post('/organizations/resolve-account', protect, async (req, res) => {
   } catch (error) {
     console.error('❌ Account verification error:', error.response?.data || error.message);
 
+    // Handle specific error messages
+    const errorMsg = error.response?.data?.message || error.message;
+
+    if (errorMsg.includes('only 044') || errorMsg.includes('must be numeric')) {
+      return res.status(400).json({
+        success: false,
+        message: 'Bank not supported for verification. Please use a supported bank.'
+      });
+    }
+
     if (error.response?.data?.status === 'error') {
       return res.status(400).json({
         success: false,
@@ -1806,6 +1803,7 @@ router.post('/organizations/resolve-account', protect, async (req, res) => {
     });
   }
 });
+
 
 // GET /api/flutterwave/banks
 // GET /api/flutterwave/banks
