@@ -855,22 +855,38 @@ try {
         return response.data;
       }
     },
+
+
+
     Misc: {
       verify_Account: async ({ account_number, account_bank }) => {
         console.log('🔄 Using direct API call for account verification...');
-        const response = await axios.post(
-          'https://api.flutterwave.com/v3/accounts/resolve',
-          { account_number, account_bank },
-          {
-            headers: {
-              'Authorization': `Bearer ${FLW_SECRET_KEY}`,
-              'Content-Type': 'application/json'
+        try {
+          const response = await axios.post(
+            'https://api.flutterwave.com/v3/accounts/resolve',
+            {
+              account_number: account_number,
+              account_bank: account_bank
+            },
+            {
+              headers: {
+                'Authorization': `Bearer ${FLW_SECRET_KEY}`,
+                'Content-Type': 'application/json'
+              }
             }
-          }
-        );
-        return response.data;
+          );
+          return response.data;
+        } catch (error) {
+          console.error('❌ Account verification API error:', error.response?.data || error.message);
+          throw error;
+        }
       }
-    },
+    }
+
+
+
+
+    ,
     Bank: {
       get_banks: async ({ country }) => {
         const response = await axios.get(
@@ -1707,31 +1723,81 @@ router.all('/webhook-test', (req, res) => {
   });
 });
 
+// ==================== RESOLVE ACCOUNT (FLUTTERWAVE) ====================
 router.post('/organizations/resolve-account', protect, async (req, res) => {
   try {
     const { accountNumber, bankCode } = req.body;
 
-    const response = await flw.Misc.verify_Account({
-      account_number: accountNumber,
-      account_bank: bankCode
-    });
+    console.log('🔍 Resolving account:', { accountNumber, bankCode });
 
-    if (response.status === 'success') {
-      return res.json({
-        success: true,
-        accountName: response.data.account_name
+    // Validate inputs
+    if (!accountNumber || !bankCode) {
+      return res.status(400).json({
+        success: false,
+        message: 'Account number and bank code are required'
       });
     }
 
-    return res.status(400).json({
-      success: false,
-      message: 'Unable to verify account'
-    });
+    if (!/^\d{10}$/.test(accountNumber)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Account number must be exactly 10 digits'
+      });
+    }
+
+    // ===== USE DIRECT API CALL =====
+    const axios = require('axios');
+
+    const response = await axios.post(
+      'https://api.flutterwave.com/v3/accounts/resolve',
+      {
+        account_number: accountNumber,
+        account_bank: bankCode
+      },
+      {
+        headers: {
+          'Authorization': `Bearer ${FLW_SECRET_KEY}`,
+          'Content-Type': 'application/json'
+        },
+        timeout: 10000
+      }
+    );
+
+    console.log('📥 Account resolution response:', response.data);
+
+    if (response.data.status === 'success') {
+      return res.json({
+        success: true,
+        accountName: response.data.data.account_name
+      });
+    } else {
+      return res.status(400).json({
+        success: false,
+        message: response.data.message || 'Unable to verify account'
+      });
+    }
+
   } catch (error) {
-    console.error('Account verification error:', error);
+    console.error('❌ Account verification error:', error.response?.data || error.message);
+
+    // Check for specific error types
+    if (error.response?.data?.status === 'error') {
+      return res.status(400).json({
+        success: false,
+        message: error.response.data.message || 'Account verification failed'
+      });
+    }
+
+    if (error.code === 'ECONNABORTED') {
+      return res.status(408).json({
+        success: false,
+        message: 'Request timed out. Please try again.'
+      });
+    }
+
     res.status(500).json({
       success: false,
-      message: 'Account verification failed'
+      message: 'Account verification failed. Please try again later.'
     });
   }
 });
