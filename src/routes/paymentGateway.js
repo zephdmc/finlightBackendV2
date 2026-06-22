@@ -856,17 +856,17 @@ try {
       }
     },
     // In the fallback section, update Misc:
+    // In the fallback section, ensure Misc.verify_Account is properly set up:
     Misc: {
       verify_Account: async ({ account_number, account_bank }) => {
-        console.log('🔄 Using direct API call for account verification...');
+        console.log('🔄 Using direct API call fallback for account verification...');
         try {
-          const cleanBankCode = String(account_bank).trim();
-
+          // Try with the bank code as provided
           const response = await axios.post(
             'https://api.flutterwave.com/v3/accounts/resolve',
             {
               account_number: account_number,
-              account_bank: cleanBankCode
+              account_bank: String(account_bank)  // Ensure it's a string
             },
             {
               headers: {
@@ -877,8 +877,12 @@ try {
           );
           return response.data;
         } catch (error) {
-          console.error('❌ Account verification API error:', error.response?.data || error.message);
-          throw error;
+          console.error('❌ Account verification fallback error:', error.response?.data || error.message);
+          // Return a structured error that matches the SDK format
+          return {
+            status: 'error',
+            message: error.response?.data?.message || 'Account verification failed'
+          };
         }
       }
     },
@@ -1719,11 +1723,12 @@ router.all('/webhook-test', (req, res) => {
 });
 
 // ==================== RESOLVE ACCOUNT (FLUTTERWAVE) ====================
+// ==================== RESOLVE ACCOUNT (FLUTTERWAVE SDK) ====================
 router.post('/organizations/resolve-account', protect, async (req, res) => {
   try {
     const { accountNumber, bankCode } = req.body;
 
-    console.log('🔍 Resolving account:', { accountNumber, bankCode });
+    console.log('🔍 Resolving account with SDK:', { accountNumber, bankCode });
 
     // Validate inputs
     if (!accountNumber || !bankCode) {
@@ -1740,60 +1745,34 @@ router.post('/organizations/resolve-account', protect, async (req, res) => {
       });
     }
 
-    // ===== USE DIRECT API CALL INSTEAD OF SDK =====
-    const axios = require('axios');
+    // ===== USE SDK METHOD (was working before) =====
+    const response = await flw.Misc.verify_Account({
+      account_number: accountNumber,
+      account_bank: String(bankCode)  // Ensure it's a string
+    });
 
-    // Convert to string and clean
-    const cleanBankCode = String(bankCode).trim();
+    console.log('📥 SDK Account resolution response:', response);
 
-    console.log(`🔄 Calling Flutterwave API with bank code: ${cleanBankCode}`);
-
-    const response = await axios.post(
-      'https://api.flutterwave.com/v3/accounts/resolve',
-      {
-        account_number: accountNumber,
-        account_bank: cleanBankCode
-      },
-      {
-        headers: {
-          'Authorization': `Bearer ${FLW_SECRET_KEY}`,
-          'Content-Type': 'application/json'
-        },
-        timeout: 15000
-      }
-    );
-
-    console.log('📥 Account resolution response:', response.data);
-
-    if (response.data.status === 'success') {
+    if (response.status === 'success') {
       return res.json({
         success: true,
-        accountName: response.data.data.account_name
+        accountName: response.data.account_name
       });
     } else {
       return res.status(400).json({
         success: false,
-        message: response.data.message || 'Unable to verify account'
+        message: response.message || 'Unable to verify account'
       });
     }
 
   } catch (error) {
     console.error('❌ Account verification error:', error.response?.data || error.message);
 
-    // Handle specific error messages
-    const errorMsg = error.response?.data?.message || error.message;
-
-    if (errorMsg.includes('only 044') || errorMsg.includes('must be numeric')) {
+    // Check if SDK fallback is being used
+    if (error.message?.includes('direct API call')) {
       return res.status(400).json({
         success: false,
         message: 'Bank not supported for verification. Please use a supported bank.'
-      });
-    }
-
-    if (error.response?.data?.status === 'error') {
-      return res.status(400).json({
-        success: false,
-        message: error.response.data.message || 'Account verification failed'
       });
     }
 
@@ -1803,7 +1782,6 @@ router.post('/organizations/resolve-account', protect, async (req, res) => {
     });
   }
 });
-
 
 // GET /api/flutterwave/banks
 // GET /api/flutterwave/banks
