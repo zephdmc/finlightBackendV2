@@ -1196,7 +1196,7 @@ const validatePaymentVerification = [
 
 // ==================== PAYMENT INITIALIZATION (FLUTTERWAVE WITH TWO SUBACCOUNTS) ====================
 // ==================== PAYMENT INITIALIZATION (FLUTTERWAVE WITH TWO SUBACCOUNTS) ====================
-router.post('/initializes', protect, paymentInitLimiter, validatePaymentInit, async (req, res) => {
+router.post('/initialize', protect, paymentInitLimiter, validatePaymentInit, async (req, res) => {
   // ===== ADD THIS AT THE VERY START =====
   console.log('🔥🔥🔥 /initialize route was called! 🔥🔥🔥');
   console.log('Request body:', req.body);
