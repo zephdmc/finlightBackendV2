@@ -1400,7 +1400,6 @@ router.post('/initialize', protect, paymentInitLimiter, validatePaymentInit, asy
 
 // ==================== PAYMENT VERIFICATION ====================
 // ==================== PAYMENT VERIFICATION ====================
-// ==================== PAYMENT VERIFICATION ====================
 router.get('/verify/:reference', verifyLimiter, validatePaymentVerification, async (req, res) => {
   const { reference } = req.params;
 
@@ -1428,13 +1427,18 @@ router.get('/verify/:reference', verifyLimiter, validatePaymentVerification, asy
   try {
     console.log('🔍 Verifying payment with reference:', reference);
 
+    // First try to find by transactionReference
     let payment = await Payment.findOne({ transactionReference: reference })
       .populate('user', 'name email organizationId');
 
+    // If not found, try to extract payment ID from reference
     if (!payment) {
       const match = reference.match(/PAY-([a-f0-9]+)-/);
       if (match && match[1]) {
         payment = await Payment.findById(match[1]).populate('user', 'name email organizationId');
+        if (payment) {
+          console.log('✅ Found payment by ID from reference:', payment._id);
+        }
       }
     }
 
@@ -1444,7 +1448,16 @@ router.get('/verify/:reference', verifyLimiter, validatePaymentVerification, asy
       return res.status(404).json({ success: false, message: 'Payment not found' });
     }
 
-    // Check if already paid
+    // Log payment details for debugging
+    console.log('📊 Payment details:', {
+      id: payment._id,
+      status: payment.status,
+      paymentTypeId: payment.paymentTypeId,
+      amount: payment.amount,
+      transactionReference: payment.transactionReference
+    });
+
+    // If already paid, return success
     if (payment.status === 'paid') {
       console.log('✅ Payment already verified and marked as paid');
       verificationInProgress.delete(reference);
@@ -1461,10 +1474,9 @@ router.get('/verify/:reference', verifyLimiter, validatePaymentVerification, asy
       });
     }
 
-    // ===== FIX: Use direct API call with the correct endpoint =====
+    // ===== Verify with Flutterwave =====
     console.log('🔄 Verifying with Flutterwave using reference:', reference);
 
-    // Use the verify_by_reference endpoint
     const verifyUrl = `https://api.flutterwave.com/v3/transactions/verify_by_reference?tx_ref=${reference}`;
 
     const response = await withRetry(async () => {
@@ -1478,7 +1490,7 @@ router.get('/verify/:reference', verifyLimiter, validatePaymentVerification, asy
       return axiosResponse.data;
     });
 
-    // ===== CHECK IF PAYMENT WAS SUCCESSFUL =====
+    // ===== Check if payment was successful =====
     console.log('🔍 Full Flutterwave response:', JSON.stringify(response, null, 2));
 
     if (response.status === 'success' && response.data && response.data.status === 'successful') {
@@ -1493,7 +1505,7 @@ router.get('/verify/:reference', verifyLimiter, validatePaymentVerification, asy
         result = await processPartialPayment(payment, amountPaid, reference, false);
         console.log(`⚠️ Partial payment! Paid: ₦${amountPaid}, Expected: ₦${expectedAmount}, Remaining target: ₦${result.remainingTarget}`);
       } else {
-        // ===== FIX: Mark payment as paid =====
+        // ===== Mark payment as paid =====
         const updatedPayment = await Payment.findOneAndUpdate(
           { _id: payment._id },
           {
@@ -1532,7 +1544,8 @@ router.get('/verify/:reference', verifyLimiter, validatePaymentVerification, asy
           amount: payment.amount,
           isPartial: isPartialPayment || false,
           remainingAmount: result?.remainingTarget || payment.remainingAmount || 0,
-          totalPaidSoFar: payment.totalPaidSoFar || amountPaid
+          totalPaidSoFar: payment.totalPaidSoFar || amountPaid,
+          paymentTypeId: payment.paymentTypeId
         },
         message: isPartialPayment ? `Partial payment of ₦${amountPaid.toLocaleString()} verified. Outstanding balance: ₦${result?.remainingTarget.toLocaleString()}` : 'Payment verified successfully'
       });
@@ -1542,7 +1555,7 @@ router.get('/verify/:reference', verifyLimiter, validatePaymentVerification, asy
       console.log('⚠️ Data status:', response.data?.status);
 
       // If payment is still pending, return pending status
-      if (response.data?.status === 'pending') {
+      if (response.data?.status === 'pending' || response.status === 'pending') {
         verificationInProgress.delete(reference);
         resolveVerification();
         return res.status(200).json({
@@ -1551,9 +1564,36 @@ router.get('/verify/:reference', verifyLimiter, validatePaymentVerification, asy
             status: 'pending',
             amount: payment.amount,
             remainingAmount: payment.remainingAmount || payment.amount,
-            totalPaidSoFar: payment.totalPaidSoFar || 0
+            totalPaidSoFar: payment.totalPaidSoFar || 0,
+            paymentTypeId: payment.paymentTypeId
           },
           message: 'Payment is still processing. Please check back later.'
+        });
+      }
+
+      // If payment was cancelled, update status to unpaid so user can retry
+      if (response.data?.status === 'cancelled' || response.data?.status === 'failed') {
+        await Payment.findByIdAndUpdate(payment._id, {
+          $set: {
+            status: 'unpaid',
+            remainingAmount: payment.amount,
+            totalPaidSoFar: 0
+          }
+        });
+        console.log('🔄 Payment was cancelled, status updated to unpaid');
+
+        verificationInProgress.delete(reference);
+        resolveVerification();
+        return res.status(200).json({
+          success: true,
+          data: {
+            status: 'unpaid',
+            amount: payment.amount,
+            remainingAmount: payment.amount,
+            totalPaidSoFar: 0,
+            paymentTypeId: payment.paymentTypeId
+          },
+          message: 'Payment was cancelled. You can try again.'
         });
       }
 
