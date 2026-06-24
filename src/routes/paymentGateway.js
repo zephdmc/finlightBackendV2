@@ -1332,7 +1332,7 @@ router.post('/initialize', protect, paymentInitLimiter, validatePaymentInit, asy
     const payload = {
       tx_ref: uniqueRef,
       amount: memberPayAmount,
-      currency: "NGN",
+      // currency: "NGN",
       redirect_url: `${FRONTEND_URL}/payment-verify`,
       customer: {
         email: payment.user.email,
