@@ -1284,39 +1284,25 @@ router.post('/initialize', protect, paymentInitLimiter, validatePaymentInit, asy
     }
 
 
+    // Calculate amounts
+    const platformFeeAmount = Math.round(memberPayAmount * 0.04);  // 4% platform fee = ₦4
+    const organizationAmount = memberPayAmount - platformFeeAmount; // 94% organization = ₦103
 
-    // Calculate platform fee amount (4% of memberPayAmount)
-    const platformFeeAmount = Math.round(memberPayAmount * 0.04);
-    // Organization gets 94% (memberPayAmount - 4% platform fee)
-    const organizationAmount = memberPayAmount - platformFeeAmount;
-
-    // Generate unique transaction reference
-    const uniqueRef = `PAY-${payment._id}-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
-
-
-    // ===== FIXED: Split configuration =====
-    // const subaccounts = [
-    //   {
-    //     id: organizationSubaccountId,
-    //     transaction_split_type: 'flat',
-    //     transaction_split_value: platformFeeAmount   // Organization gets 94%
-    //   },
-    //   {
-    //     id: PLATFORM_SUBACCOUNT_ID,
-    //     transaction_split_type: 'flat',
-    //     transaction_split_value: organizationAmount   // Platform gets 4%
-    //   }
-    // ];
+    // ===== FIX: Percentage split with effective values =====
+    // Since Flutterwave takes 2% first, we need to adjust the percentage
+    // Organization should get 94% of original amount
+    // After Flutterwave takes 2%, 98% remains
+    // So organization should get: 94/98 = 95.92% of the remaining amount
+    const effectiveOrgPercentage = (94 / 98) * 100;
 
     const subaccounts = [
       {
         id: organizationSubaccountId,
         transaction_split_type: 'percentage',
-        transaction_split_value: 94     // Organization gets 94%
-      },
-
+        transaction_split_value: effectiveOrgPercentage  // ~95.92%
+      }
+      // Platform fee (4%) stays in merchant account automatically
     ];
-
     console.log('📤 Split configuration:', {
       organizationSubaccount: organizationSubaccountId,
       organizationGets: organizationAmount,
