@@ -1311,12 +1311,12 @@ router.post('/initialize', protect, paymentInitLimiter, validatePaymentInit, asy
       {
         id: organizationSubaccountId,
         transaction_split_type: 'flat',
-        transaction_split_value: platformFeeAmount   // Organization gets 94%
+        transaction_split_value: organizationAmount     // Organization gets 94%
       },
       {
         id: PLATFORM_SUBACCOUNT_ID,
         transaction_split_type: 'flat',
-        transaction_split_value: organizationAmount   // Platform gets 4%
+        transaction_split_value: platformFeeAmount// Platform gets 4%
       }
     ];
 
