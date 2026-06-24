@@ -1261,8 +1261,8 @@ router.post('/initialize', protect, paymentInitLimiter, validatePaymentInit, asy
     if (payment.user.organizationId) {
       organization = await Organization.findById(payment.user.organizationId);
       // ===== FIX: Use subaccountCode instead of subaccountId =====
-      if (organization?.flutterwave?.subaccountCode) {
-        organizationSubaccountId = organization.flutterwave.subaccountCode;
+      if (organization?.flutterwave?.subaccountId) {
+        organizationSubaccountId = organization.flutterwave.subaccountId;
         console.log(`✅ Organization subaccount Code: ${organizationSubaccountId}`);
       } else {
         console.log(`⚠️ No Flutterwave subaccount for organization: ${payment.user.organizationId}`);
@@ -1294,6 +1294,19 @@ router.post('/initialize', protect, paymentInitLimiter, validatePaymentInit, asy
     const uniqueRef = `PAY-${payment._id}-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
 
     // ===== FIXED: Split configuration =====
+    // const subaccounts = [
+    //   {
+    //     id: organizationSubaccountId,
+    //     transaction_split_type: 'flat',
+    //     transaction_split_value: platformFeeAmount   // Organization gets 94%
+    //   },
+    //   {
+    //     id: PLATFORM_SUBACCOUNT_ID,
+    //     transaction_split_type: 'flat',
+    //     transaction_split_value: organizationAmount   // Platform gets 4%
+    //   }
+    // ];
+
     const subaccounts = [
       {
         id: organizationSubaccountId,
