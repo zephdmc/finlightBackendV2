@@ -1287,7 +1287,7 @@ router.post('/initialize', protect, paymentInitLimiter, validatePaymentInit, asy
     // Calculate amounts
     const platformFeeAmount = Math.round(memberPayAmount * 0.04);  // 4% platform fee = ₦4
     const organizationAmount = memberPayAmount - platformFeeAmount; // 94% organization = ₦103
-
+    const uniqueRef = `PAY-${payment._id}-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
     // ===== FIX: Percentage split with effective values =====
     // Since Flutterwave takes 2% first, we need to adjust the percentage
     // Organization should get 94% of original amount
