@@ -1261,8 +1261,8 @@ router.post('/initialize', protect, paymentInitLimiter, validatePaymentInit, asy
     if (payment.user.organizationId) {
       organization = await Organization.findById(payment.user.organizationId);
       // ===== FIX: Use subaccountCode instead of subaccountId =====
-      if (organization?.flutterwave?.subaccountId) {
-        organizationSubaccountId = organization.flutterwave.subaccountId;
+      if (organization?.flutterwave?.subaccountCode) {
+        organizationSubaccountId = organization.flutterwave.subaccountCode;
         console.log(`✅ Organization subaccount Code: ${organizationSubaccountId}`);
       } else {
         console.log(`⚠️ No Flutterwave subaccount for organization: ${payment.user.organizationId}`);
