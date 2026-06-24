@@ -1293,6 +1293,7 @@ router.post('/initialize', protect, paymentInitLimiter, validatePaymentInit, asy
     // Generate unique transaction reference
     const uniqueRef = `PAY-${payment._id}-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
 
+
     // ===== FIXED: Split configuration =====
     // const subaccounts = [
     //   {
@@ -1313,11 +1314,7 @@ router.post('/initialize', protect, paymentInitLimiter, validatePaymentInit, asy
         transaction_split_type: 'percentage',
         transaction_split_value: 94     // Organization gets 94%
       },
-      {
-        id: PLATFORM_SUBACCOUNT_ID,
-        transaction_split_type: 'percentage',
-        transaction_split_value: 4 // Platform gets 4%
-      }
+
     ];
 
     console.log('📤 Split configuration:', {
