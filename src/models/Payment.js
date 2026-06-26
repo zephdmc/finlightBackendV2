@@ -188,7 +188,7 @@ const paymentSchema = new mongoose.Schema({
 
 // ==================== PRE-SAVE HOOKS ====================
 
-paymentSchema.pre('save', function(next) {
+paymentSchema.pre('save', function (next) {
   this.updatedAt = new Date();
 
   // Auto-set targetOrgAmount if not set
@@ -218,23 +218,23 @@ paymentSchema.pre('save', function(next) {
 // ==================== VIRTUAL FIELDS ====================
 
 // Virtual for percentage paid
-paymentSchema.virtual('percentagePaid').get(function() {
+paymentSchema.virtual('percentagePaid').get(function () {
   if (!this.targetOrgAmount || this.targetOrgAmount === 0) return 0;
   return (this.totalPaidSoFar / this.targetOrgAmount) * 100;
 });
 
 // Virtual for isFullyPaid
-paymentSchema.virtual('isFullyPaid').get(function() {
+paymentSchema.virtual('isFullyPaid').get(function () {
   return this.remainingAmount <= 0;
 });
 
 // Virtual for hasOutstandingBalance
-paymentSchema.virtual('hasOutstandingBalance').get(function() {
+paymentSchema.virtual('hasOutstandingBalance').get(function () {
   return this.remainingAmount > 0 && this.status !== 'paid';
 });
 
 // Virtual for total fees paid (Flutterwave + platform)
-paymentSchema.virtual('totalFeesPaid').get(function() {
+paymentSchema.virtual('totalFeesPaid').get(function () {
   return (this.flutterwaveFeeDeducted || 0) + (this.platformFeeDeducted || 0);
 });
 
@@ -243,7 +243,7 @@ paymentSchema.virtual('totalFeesPaid').get(function() {
 /**
  * Add a partial payment record
  */
-paymentSchema.methods.addPartialPayment = function(partialData) {
+paymentSchema.methods.addPartialPayment = function (partialData) {
   this.partialPayments = this.partialPayments || [];
   this.partialPayments.push({
     amount: partialData.amount,
@@ -275,7 +275,7 @@ paymentSchema.methods.addPartialPayment = function(partialData) {
 /**
  * Get outstanding payment record for this payment (if exists)
  */
-paymentSchema.methods.getOutstandingRecord = async function() {
+paymentSchema.methods.getOutstandingRecord = async function () {
   return await mongoose.model('Payment').findOne({
     parentPaymentId: this._id,
     type: 'outstanding',
@@ -286,7 +286,7 @@ paymentSchema.methods.getOutstandingRecord = async function() {
 /**
  * Check if payment can be paid (not fully paid)
  */
-paymentSchema.methods.isPayable = function() {
+paymentSchema.methods.isPayable = function () {
   return this.status !== 'paid' && (this.remainingAmount > 0);
 };
 
@@ -295,7 +295,7 @@ paymentSchema.methods.isPayable = function() {
 /**
  * Find all outstanding payments for a user
  */
-paymentSchema.statics.findOutstandingByUser = function(userId, organizationId) {
+paymentSchema.statics.findOutstandingByUser = function (userId, organizationId) {
   return this.find({
     user: userId,
     organizationId: organizationId,
@@ -307,7 +307,7 @@ paymentSchema.statics.findOutstandingByUser = function(userId, organizationId) {
 /**
  * Get total outstanding amount for a user
  */
-paymentSchema.statics.getTotalOutstandingByUser = async function(userId, organizationId) {
+paymentSchema.statics.getTotalOutstandingByUser = async function (userId, organizationId) {
   const result = await this.aggregate([
     {
       $match: {
@@ -331,7 +331,7 @@ paymentSchema.statics.getTotalOutstandingByUser = async function(userId, organiz
 /**
  * Find all partial payments for a user
  */
-paymentSchema.statics.findPartialPaymentsByUser = function(userId, organizationId) {
+paymentSchema.statics.findPartialPaymentsByUser = function (userId, organizationId) {
   return this.find({
     user: userId,
     organizationId: organizationId,
@@ -373,5 +373,15 @@ paymentSchema.index({ transactionReference: 1 }, { unique: true, sparse: true })
 
 // Compound index for user outstanding queries
 paymentSchema.index({ user: 1, organizationId: 1, status: 1, remainingAmount: 1 });
+
+
+// Add TTL index to auto-delete pending payments after 24 hours
+paymentSchema.index(
+  { createdAt: 1 },
+  {
+    expireAfterSeconds: 86400, // 24 hours
+    partialFilterExpression: { status: 'pending' }
+  }
+);
 
 module.exports = mongoose.model('Payment', paymentSchema);
