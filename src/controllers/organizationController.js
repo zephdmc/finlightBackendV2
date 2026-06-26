@@ -961,12 +961,7 @@ class OrganizationController {
         country: 'NG'
       };
 
-      // Only add currency if the bank code is a known Nigerian bank
-      // NGN is the default for Nigerian banks
-      const nigerianBankCodes = ['044', '058', '011', '070', '033', '057', '221', '232', '050', '023', '214', '030', '082', '076', '101', '068', '100', '102', '032', '215', '035'];
-      if (nigerianBankCodes.includes(String(bankCode))) {
-        payload.currency = 'NGN';
-      }
+
 
       console.log('📤 Creating Flutterwave subaccount:', payload);
       const response = await flw.Subaccount.create(payload);
