@@ -956,8 +956,8 @@ class OrganizationController {
         business_name: businessName,
         business_email: email,
         business_mobile: phone || '08012345678',
-        split_type: 'flat',  // ← CHANGE from 'flat' to 'percentage'
-        split_value: 0,           // ← Organization keeps 94%
+        split_type: 'percentage',  // ← CHANGE from 'flat' to 'percentage'
+        split_value: 100,           // ← Organization keeps 94%
         country: 'NG'
       };
 
