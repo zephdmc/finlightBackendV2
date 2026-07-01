@@ -1208,7 +1208,7 @@ const crypto = require('crypto');
  */
 const calculateFeesAndNet = (amountPaid) => {
   const flutterwaveFee = amountPaid * 0.02;
-  const platformFee = amountPaid * 0.04;
+  const platformFee = amountPaid * 0.02;
   const totalFees = flutterwaveFee + platformFee;
   const netToOrg = amountPaid - totalFees;
   return {

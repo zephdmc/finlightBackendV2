@@ -788,7 +788,7 @@ const FRONTEND_URL = rawFrontendUrl.split(',')[0].trim();
 console.log('📌 Using FRONTEND_URL:', FRONTEND_URL);
 // const FRONTEND_URL = process.env.FRONTEND_URL || 'https://finlightv2.web.app';
 
-// Platform subaccount ID (where your 4% platform fee goes)
+// Platform subaccount ID (where your 2% platform fee goes)
 const PLATFORM_SUBACCOUNT_ID = process.env.PLATFORM_SUBACCOUNT_ID;
 
 // Initialize Flutterwave SDK
@@ -1008,16 +1008,16 @@ const validateAmount = (amount) => {
 // In‑memory verification tracker
 const verificationInProgress = new Map();
 
-// ==================== FEE CALCULATION (2% + 4% = 6% total) ====================
+// ==================== FEE CALCULATION (2% + 2% = 6% total) ====================
 /**
- * Member pays = targetOrgAmount / (1 - 0.02 - 0.04) = target / 0.94
- * This amount includes Flutterwave 2% + Platform 4% fees.
+ * Member pays = targetOrgAmount / (1 - 0.02 - 0.02) = target / 0.96
+ * This amount includes Flutterwave 2% + Platform 2% fees.
  */
 const calculateMemberPayAmount = (targetOrganizationAmount) => {
   if (!targetOrganizationAmount || targetOrganizationAmount <= 0) return 0;
 
   // Initial calculation
-  let memberPays = targetOrganizationAmount / 0.94;
+  let memberPays = targetOrganizationAmount / 0.96;
   memberPays = Math.ceil(memberPays);
 
   // Verify net to organisation is at least target (with tolerance of 1 NGN)
@@ -1034,12 +1034,12 @@ const calculateMemberPayAmount = (targetOrganizationAmount) => {
 /**
  * Given the amount a member actually paid, calculate:
  * - Flutterwave fee (2%)
- * - Platform fee (4%)
+ * - Platform fee (2%)
  * - Net amount the organization receives
  */
 const calculateNetToOrganization = (amountPaid, targetOrgAmount = null) => {
   let flutterwaveFee = amountPaid * 0.02;
-  let platformFee = amountPaid * 0.04;
+  let platformFee = amountPaid * 0.02;
   let totalFees = flutterwaveFee + platformFee;
   let netToOrg = amountPaid - totalFees;
 
@@ -1075,7 +1075,7 @@ const processPartialPayment = async (originalPayment, amountPaid, reference, isM
   const targetOrgAmount = originalPayment.targetOrgAmount || originalPayment.amount;
   const totalPaidSoFar = (originalPayment.totalPaidSoFar || 0) + amountPaid;
 
-  // Calculate what organization gets from THIS payment (after 2% + 4% fees)
+  // Calculate what organization gets from THIS payment (after 2% + 2% fees)
   const fees = calculateNetToOrganization(amountPaid);
   const netToOrgFromThisPayment = fees.netToOrg;
 
@@ -1285,15 +1285,15 @@ router.post('/initialize', protect, paymentInitLimiter, validatePaymentInit, asy
 
 
     // Calculate amounts
-    const platformFeeAmount = Math.round(memberPayAmount * 0.04);  // 4% platform fee = ₦4
-    const organizationAmount = memberPayAmount - platformFeeAmount; // 94% organization = ₦103
+    const platformFeeAmount = Math.round(memberPayAmount * 0.02);  // 2% platform fee = ₦2
+    const organizationAmount = memberPayAmount - platformFeeAmount; // 96% organization = ₦103
     const uniqueRef = `PAY-${payment._id}-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
     // ===== FIX: Percentage split with effective values =====
     // Since Flutterwave takes 2% first, we need to adjust the percentage
-    // Organization should get 94% of original amount
+    // Organization should get 92% of original amount
     // After Flutterwave takes 2%, 98% remains
     // So organization should get: 94/98 = 95.92% of the remaining amount
-    const effectiveOrgPercentage = (94 / 98) * 100;
+    const effectiveOrgPercentage = (96 / 98) * 100;
 
     const subaccounts = [
       {
@@ -1301,7 +1301,7 @@ router.post('/initialize', protect, paymentInitLimiter, validatePaymentInit, asy
         transaction_split_type: 'percentage',
         transaction_split_value: effectiveOrgPercentage  // ~95.92%
       }
-      // Platform fee (4%) stays in merchant account automatically
+      // Platform fee (2%) stays in merchant account automatically
     ];
     console.log('📤 Split configuration:', {
       organizationSubaccount: organizationSubaccountId,
