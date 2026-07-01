@@ -14,6 +14,9 @@ const startServer = async () => {
   try {
     // Connect to database using your database config
     await database.connect();
+    if (process.env.NODE_ENV !== 'test') {
+      require('./src/jobs/verifyPendingPayments');
+    }
     const requiredEnv = ['FLW_SECRET_KEY', 'FLW_PUBLIC_KEY', 'FLW_ENCRYPTION_KEY', 'FLW_WEBHOOK_SECRET', 'PLATFORM_SUBACCOUNT_ID'];
     const missing = requiredEnv.filter(key => !process.env[key]);
     if (missing.length) {

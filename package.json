@@ -33,6 +33,7 @@
         "moment": "^2.29.4",
         "mongoose": "^7.5.0",
         "morgan": "^1.10.1",
+        "node-cron": "^4.5.0",
         "nodemailer": "^8.0.7",
         "redis": "^5.12.1",
         "xss-clean": "^0.1.4"
