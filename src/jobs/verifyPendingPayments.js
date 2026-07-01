@@ -9,7 +9,7 @@ const verifyPendingPayments = async () => {
   console.log(`[${new Date().toISOString()}] Running pending payment verification job...`);
 
   // Consider only payments older than 10 minutes to give webhook time
-  const cutoff = new Date(Date.now() - 10 * 60 * 1000);
+  const cutoff = new Date(Date.now() - 5 * 60 * 1000);
 
   const pendingPayments = await Payment.find({
     status: 'pending',                // Only pending/unverified
