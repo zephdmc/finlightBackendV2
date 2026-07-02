@@ -916,6 +916,16 @@ exports.createMemberPayment = async (req, res, next) => {
             transactionReference: `PENDING-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`  // ✅ Fixed: proper format
 
         });
+        // ✅ Force save if field is missing
+        if (!payment.transactionReference) {
+            console.log('⚠️ transactionReference missing, forcing update...');
+            await Payment.findByIdAndUpdate(payment._id, {
+                $set: { transactionReference: `PENDING-${Date.now()}-${Math.random().toString(36).substr(2, 9)}` }
+            });
+            // Re-fetch the payment
+            const updated = await Payment.findById(payment._id);
+            console.log(`✅ After force update: ${updated.transactionReference}`);
+        }
 
         console.log(`✅ Payment created with reference: ${payment.transactionReference}`);
 
