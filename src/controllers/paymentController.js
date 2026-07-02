@@ -2063,15 +2063,33 @@ exports.createMemberPayment = async (req, res, next) => {
       user: userId,
       paymentTypeId,
       organizationId,
-      status: { $in: ['unpaid', 'partial'] },
+      status: { $in: ['unpaid', 'partial', 'pending'] },
       remainingAmount: { $gt: 0 }
     });
 
-    if (existingOutstanding) {
+    // if (existingOutstanding) {
+    //   return res.status(200).json({
+    //     success: true,
+    //     data: existingOutstanding,
+    //     message: 'Existing outstanding balance found. Please pay the remaining amount.'
+    //   });
+    // }
+    if (existingPayment) {
+      // If there's an existing payment, return it
+      let message = 'You already have a payment for this type.';
+
+      if (existingPayment.status === 'pending') {
+        message = 'You have a pending payment. Please complete or cancel it first.';
+      } else if (existingPayment.status === 'partial') {
+        message = `You have an outstanding balance of ₦${existingPayment.remainingAmount.toLocaleString()}. Please complete the payment.`;
+      } else if (existingPayment.status === 'unpaid') {
+        message = 'You have an unpaid payment. Please complete the payment.';
+      }
+
       return res.status(200).json({
         success: true,
-        data: existingOutstanding,
-        message: 'Existing outstanding balance found. Please pay the remaining amount.'
+        data: existingPayment,
+        message
       });
     }
 
@@ -2089,8 +2107,10 @@ exports.createMemberPayment = async (req, res, next) => {
       description: description || `${name} payment`,
       paymentTypeId: paymentTypeId || null,
       organizationId,
-      status: 'pending..',
-      transactionReference: `PENDING-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+      status: 'pending...',
+      // transactionReference: `PENDING-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+      transactionReference: `PENDING-.....`
+
     });
 
     res.status(201).json({ success: true, data: payment, message: 'Payment created successfully' });
