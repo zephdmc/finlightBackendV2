@@ -120,18 +120,10 @@ const paymentSchema = new mongoose.Schema({
     default: 'unpaid',
     comment: 'partial status indicates partially paid with outstanding balance'
   },
-  // ❌ REMOVE THIS ENTIRE 'cool' FIELD
-  // cool: {
-  //   type: String,
-  //   enum: ['paid', 'unpaid', 'pendinge', 'partial'],
-  //   default: 'unpaid',
-  //   comment: 'partial status indicates partially paid with outstanding balance'
-  // },
-
   transactionReference: {
     type: String,
     // unique: true,  // ❌ REMOVE THIS LINE
-    sparse: true
+    // sparse: true
   },
   paidAt: {
     type: Date
@@ -328,10 +320,6 @@ paymentSchema.index({ organizationId: 1, isPartial: 1, status: 1 });
 paymentSchema.index({ organizationId: 1, flutterwaveFeeDeducted: 1 });
 paymentSchema.index({ organizationId: 1, platformFeeDeducted: 1 });
 paymentSchema.index({ organizationId: 1, netToOrganization: 1 });
-
-// ❌ REMOVE THIS INDEX LINE (or comment it out)
-// paymentSchema.index({ transactionReference: 1 }, { unique: true, sparse: true });
-
 paymentSchema.index({ user: 1, organizationId: 1, status: 1, remainingAmount: 1 });
 
 // Keep TTL index for auto-deleting pending payments
