@@ -123,7 +123,7 @@ const paymentSchema = new mongoose.Schema({
   transactionReference: {
     type: String,
     // unique: true,  // ❌ REMOVE THIS LINE
-    // sparse: true
+    sparse: true
   },
   paidAt: {
     type: Date
