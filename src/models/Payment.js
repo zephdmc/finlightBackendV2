@@ -120,10 +120,11 @@ const paymentSchema = new mongoose.Schema({
     default: 'unpaid',
     comment: 'partial status indicates partially paid with outstanding balance'
   },
-  transactionReference: {
+
+  transactionReference1: {
     type: String,
     unique: true,
-    // sparse: true
+    sparse: true
   },
   paidAt: {
     type: Date
