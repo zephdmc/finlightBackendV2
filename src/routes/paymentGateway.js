@@ -1513,7 +1513,8 @@ router.get('/verify/:reference', verifyLimiter, validatePaymentVerification, asy
               totalPaidSoFar: amountPaid,
               remainingAmount: 0,
               isPartial: false,
-              completedAt: new Date()
+              completedAt: new Date(),
+              transactionReference: reference
             }
           },
           { new: true }
@@ -1662,7 +1663,8 @@ router.post('/webhook', webhookLimiter, async (req, res) => {
                 totalPaidSoFar: amountPaid,
                 remainingAmount: 0,
                 isPartial: false,
-                completedAt: new Date()
+                completedAt: new Date(),
+                transactionReference: tx_ref  // ✅ ADD THIS LINE
               }
             }
           );

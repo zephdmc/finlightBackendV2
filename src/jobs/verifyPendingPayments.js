@@ -11,11 +11,12 @@ const verifyPendingPayments = async () => {
   // Consider only payments older than 10 minutes to give webhook time
   const cutoff = new Date(Date.now() - 5 * 60 * 1000);
 
+
   const pendingPayments = await Payment.find({
-    status: 'pending',                // Only pending/unverified
-    transactionReference: { $ne: null },
+    status: 'pending',
+    transactionReference: { $exists: true, $ne: null }, // Also catches PENDING-...
     createdAt: { $lt: cutoff }
-  }).limit(50); // Avoid overwhelming the system
+  }).limit(50);
 
   if (pendingPayments.length === 0) {
     console.log('No pending payments to verify.');
