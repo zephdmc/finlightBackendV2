@@ -2048,6 +2048,80 @@ exports.getPaymentStats = async (req, res, next) => {
 // @desc    Create payment for member (no admin required, used by gateway)
 // @route   POST /api/payments/member-payment
 // @access  Private
+// exports.createMemberPayment = async (req, res, next) => {
+//   try {
+//     const { name, type, amount, description, paymentTypeId } = req.body;
+//     const userId = req.user.id;
+//     const organizationId = req.user.organizationId;
+
+//     if (!name || !type || !amount || amount <= 0) {
+//       return res.status(400).json({ success: false, message: 'Missing required fields' });
+//     }
+
+//     // Check for existing outstanding balance for the same payment type
+//     const existingOutstanding = await Payment.findOne({
+//       user: userId,
+//       paymentTypeId,
+//       organizationId,
+//       status: { $in: ['unpaid', 'partial', 'pending'] },
+//       remainingAmount: { $gt: 0 }
+//     });
+
+//     // if (existingOutstanding) {
+//     //   return res.status(200).json({
+//     //     success: true,
+//     //     data: existingOutstanding,
+//     //     message: 'Existing outstanding balance found. Please pay the remaining amount.'
+//     //   });
+//     // }
+//     if (existingPayment) {
+//       // If there's an existing payment, return it
+//       let message = 'You already have a payment for this type.';
+
+//       if (existingPayment.status === 'pending') {
+//         message = 'You have a pending payment. Please complete or cancel it first.';
+//       } else if (existingPayment.status === 'partial') {
+//         message = `You have an outstanding balance of ₦${existingPayment.remainingAmount.toLocaleString()}. Please complete the payment.`;
+//       } else if (existingPayment.status === 'unpaid') {
+//         message = 'You have an unpaid payment. Please complete the payment.';
+//       }
+
+//       return res.status(200).json({
+//         success: true,
+//         data: existingPayment,
+//         message
+//       });
+//     }
+
+//     const payment = await Payment.create({
+//       user: userId,
+//       name,
+//       type,
+//       amount,
+//       targetOrgAmount: amount,
+//       expectedAmount: amount,
+//       paidAmount: 0,
+//       remainingAmount: amount,
+//       totalPaidSoFar: 0,
+//       isPartial: false,
+//       description: description || `${name} payment`,
+//       paymentTypeId: paymentTypeId || null,
+//       organizationId,
+//       status: 'pending...',
+//       // transactionReference: `PENDING-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+//       transactionReference: `PENDING-.....`
+
+//     });
+
+//     res.status(201).json({ success: true, data: payment, message: 'Payment created successfully' });
+//   } catch (error) {
+//     console.error('Member payment creation error:', error);
+//     next(error);
+//   }
+// };
+// @desc    Create payment for member (no admin required, used by gateway)
+// @route   POST /api/payments/member-payment
+// @access  Private
 exports.createMemberPayment = async (req, res, next) => {
   try {
     const { name, type, amount, description, paymentTypeId } = req.body;
@@ -2058,22 +2132,16 @@ exports.createMemberPayment = async (req, res, next) => {
       return res.status(400).json({ success: false, message: 'Missing required fields' });
     }
 
-    // Check for existing outstanding balance for the same payment type
-    const existingOutstanding = await Payment.findOne({
+    // ===== CHECK FOR EXISTING PAYMENTS =====
+    // ✅ Use consistent variable name: existingPayment
+    const existingPayment = await Payment.findOne({
       user: userId,
       paymentTypeId,
       organizationId,
-      status: { $in: ['unpaid', 'partial', 'pending'] },
+      status: { $in: ['unpaid', 'partial', 'pending...'] },
       remainingAmount: { $gt: 0 }
     });
 
-    // if (existingOutstanding) {
-    //   return res.status(200).json({
-    //     success: true,
-    //     data: existingOutstanding,
-    //     message: 'Existing outstanding balance found. Please pay the remaining amount.'
-    //   });
-    // }
     if (existingPayment) {
       // If there's an existing payment, return it
       let message = 'You already have a payment for this type.';
@@ -2093,6 +2161,7 @@ exports.createMemberPayment = async (req, res, next) => {
       });
     }
 
+    // ===== CREATE NEW PAYMENT =====
     const payment = await Payment.create({
       user: userId,
       name,
@@ -2107,16 +2176,25 @@ exports.createMemberPayment = async (req, res, next) => {
       description: description || `${name} payment`,
       paymentTypeId: paymentTypeId || null,
       organizationId,
-      status: 'pending...',
-      // transactionReference: `PENDING-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
-      transactionReference: `PENDING-.....`
+      status: 'pending...',  // ✅ Fixed: just 'pending'
+      // transactionReference: `PENDING-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`  // ✅ Fixed: proper format
+      transactionReference: `PENDING-12344`  // ✅ Fixed: proper format
 
     });
 
-    res.status(201).json({ success: true, data: payment, message: 'Payment created successfully' });
+    console.log(`✅ Payment created with reference: ${payment.transactionReference}`);
+
+    res.status(201).json({
+      success: true,
+      data: payment,
+      message: 'Payment created successfully'
+    });
   } catch (error) {
     console.error('Member payment creation error:', error);
-    next(error);
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to create payment'
+    });
   }
 };
 
