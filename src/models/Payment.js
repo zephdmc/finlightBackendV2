@@ -75,12 +75,12 @@ const paymentSchema = new mongoose.Schema({
       default: Date.now,
       comment: 'Date of partial payment'
     },
-    transactionReference1: {
+    transactionReference: {
       type: String,
       comment: 'Transaction reference for this partial payment'
     },
     fees: {
-      flutterwaveFee: {   // changed from paystackFee
+      flutterwaveFee: {
         type: Number,
         default: 0,
         comment: 'Flutterwave fee deducted (2%)'
@@ -120,15 +120,17 @@ const paymentSchema = new mongoose.Schema({
     default: 'unpaid',
     comment: 'partial status indicates partially paid with outstanding balance'
   },
-  cool: {
+  // ❌ REMOVE THIS ENTIRE 'cool' FIELD
+  // cool: {
+  //   type: String,
+  //   enum: ['paid', 'unpaid', 'pendinge', 'partial'],
+  //   default: 'unpaid',
+  //   comment: 'partial status indicates partially paid with outstanding balance'
+  // },
+
+  transactionReference: {
     type: String,
-    enum: ['paid', 'unpaid', 'pendinge', 'partial'],
-    default: 'unpaid',
-    comment: 'partial status indicates partially paid with outstanding balance'
-  },
-  transactionReference1: {
-    type: String,
-    unique: true,
+    // unique: true,  // ❌ REMOVE THIS LINE
     sparse: true
   },
   paidAt: {
@@ -144,38 +146,32 @@ const paymentSchema = new mongoose.Schema({
   },
 
   // ==================== FEE TRACKING FIELDS (Flutterwave) ====================
-  // Actual amount paid by user (including fees)
   actualAmountPaid: {
     type: Number,
     default: 0,
     comment: 'Actual amount paid by member'
   },
-  // Fee deducted by Flutterwave (2% flat)
-  flutterwaveFeeDeducted: {   // renamed from paystackFeeDeducted
+  flutterwaveFeeDeducted: {
     type: Number,
     default: 0,
     comment: 'Flutterwave processing fee (2%)'
   },
-  // Platform fee deducted (4% of total paid)
   platformFeeDeducted: {
     type: Number,
     default: 0,
     comment: 'Platform service fee (4%)'
   },
-  // Net amount sent to organization after all fees
   netToOrganization: {
     type: Number,
     default: 0,
     comment: 'What organization actually received after all fees'
   },
-  // Amount after Flutterwave fee before platform split
-  afterFlutterwaveAmount: {   // renamed from afterPaystackAmount
+  afterFlutterwaveAmount: {
     type: Number,
     default: 0,
     comment: 'Amount after Flutterwave fee deduction'
   },
 
-  // Metadata for additional info
   metadata: {
     type: mongoose.Schema.Types.Mixed,
     default: {},
@@ -197,23 +193,19 @@ const paymentSchema = new mongoose.Schema({
 paymentSchema.pre('save', function (next) {
   this.updatedAt = new Date();
 
-  // Auto-set targetOrgAmount if not set
   if (!this.targetOrgAmount && this.amount) {
     this.targetOrgAmount = this.amount;
   }
 
-  // Auto-set remainingAmount if not set
   if (!this.remainingAmount && this.amount) {
     this.remainingAmount = this.amount;
   }
 
-  // Set status to 'paid' when remainingAmount is 0
   if (this.remainingAmount <= 0 && this.status !== 'paid') {
     this.status = 'paid';
     this.paidAt = this.paidAt || new Date();
   }
 
-  // Set status to 'partial' when partially paid
   if (this.totalPaidSoFar > 0 && this.remainingAmount > 0 && this.status !== 'partial') {
     this.status = 'partial';
   }
@@ -223,39 +215,32 @@ paymentSchema.pre('save', function (next) {
 
 // ==================== VIRTUAL FIELDS ====================
 
-// Virtual for percentage paid
 paymentSchema.virtual('percentagePaid').get(function () {
   if (!this.targetOrgAmount || this.targetOrgAmount === 0) return 0;
   return (this.totalPaidSoFar / this.targetOrgAmount) * 100;
 });
 
-// Virtual for isFullyPaid
 paymentSchema.virtual('isFullyPaid').get(function () {
   return this.remainingAmount <= 0;
 });
 
-// Virtual for hasOutstandingBalance
 paymentSchema.virtual('hasOutstandingBalance').get(function () {
   return this.remainingAmount > 0 && this.status !== 'paid';
 });
 
-// Virtual for total fees paid (Flutterwave + platform)
 paymentSchema.virtual('totalFeesPaid').get(function () {
   return (this.flutterwaveFeeDeducted || 0) + (this.platformFeeDeducted || 0);
 });
 
 // ==================== INSTANCE METHODS ====================
 
-/**
- * Add a partial payment record
- */
 paymentSchema.methods.addPartialPayment = function (partialData) {
   this.partialPayments = this.partialPayments || [];
   this.partialPayments.push({
     amount: partialData.amount,
     netToOrg: partialData.netToOrg,
     date: partialData.date || new Date(),
-    transactionReference1: partialData.transactionReference1,
+    transactionReference: partialData.transactionReference,
     fees: partialData.fees || {
       flutterwaveFee: 0,
       platformFee: 0,
@@ -278,9 +263,6 @@ paymentSchema.methods.addPartialPayment = function (partialData) {
   return this.save();
 };
 
-/**
- * Get outstanding payment record for this payment (if exists)
- */
 paymentSchema.methods.getOutstandingRecord = async function () {
   return await mongoose.model('Payment').findOne({
     parentPaymentId: this._id,
@@ -289,18 +271,12 @@ paymentSchema.methods.getOutstandingRecord = async function () {
   });
 };
 
-/**
- * Check if payment can be paid (not fully paid)
- */
 paymentSchema.methods.isPayable = function () {
   return this.status !== 'paid' && (this.remainingAmount > 0);
 };
 
 // ==================== STATIC METHODS ====================
 
-/**
- * Find all outstanding payments for a user
- */
 paymentSchema.statics.findOutstandingByUser = function (userId, organizationId) {
   return this.find({
     user: userId,
@@ -310,9 +286,6 @@ paymentSchema.statics.findOutstandingByUser = function (userId, organizationId) 
   }).sort({ dueDate: 1, createdAt: 1 });
 };
 
-/**
- * Get total outstanding amount for a user
- */
 paymentSchema.statics.getTotalOutstandingByUser = async function (userId, organizationId) {
   const result = await this.aggregate([
     {
@@ -334,9 +307,6 @@ paymentSchema.statics.getTotalOutstandingByUser = async function (userId, organi
   return result.length > 0 ? result[0].total : 0;
 };
 
-/**
- * Find all partial payments for a user
- */
 paymentSchema.statics.findPartialPaymentsByUser = function (userId, organizationId) {
   return this.find({
     user: userId,
@@ -348,44 +318,27 @@ paymentSchema.statics.findPartialPaymentsByUser = function (userId, organization
 
 // ==================== INDEXES ====================
 
-// Most common: fetch all payments for an organization, sorted by creation
 paymentSchema.index({ organizationId: 1, createdAt: -1 });
-
-// Filter by user within an organization
 paymentSchema.index({ organizationId: 1, user: 1, status: 1 });
-
-// Filter by payment type within an organization
 paymentSchema.index({ organizationId: 1, paymentTypeId: 1 });
-
-// Filter by status and due date (e.g., overdue payments)
 paymentSchema.index({ organizationId: 1, status: 1, dueDate: 1 });
-
-// For partial payment chains
 paymentSchema.index({ organizationId: 1, parentPaymentId: 1 });
-
-// For finding outstanding payments
 paymentSchema.index({ organizationId: 1, user: 1, status: 1, remainingAmount: 1 });
-
-// For finding partial payments
 paymentSchema.index({ organizationId: 1, isPartial: 1, status: 1 });
-
-// Fee tracking indexes (Flutterwave + platform)
 paymentSchema.index({ organizationId: 1, flutterwaveFeeDeducted: 1 });
 paymentSchema.index({ organizationId: 1, platformFeeDeducted: 1 });
 paymentSchema.index({ organizationId: 1, netToOrganization: 1 });
 
-// Transaction reference remains globally unique
-paymentSchema.index({ transactionReference1: 1 }, { unique: true, sparse: true });
+// ❌ REMOVE THIS INDEX LINE (or comment it out)
+// paymentSchema.index({ transactionReference: 1 }, { unique: true, sparse: true });
 
-// Compound index for user outstanding queries
 paymentSchema.index({ user: 1, organizationId: 1, status: 1, remainingAmount: 1 });
 
-
-// Add TTL index to auto-delete pending payments after 24 hours
+// Keep TTL index for auto-deleting pending payments
 paymentSchema.index(
   { createdAt: 1 },
   {
-    expireAfterSeconds: 86400, // 24 hours
+    expireAfterSeconds: 86400,
     partialFilterExpression: { status: 'pending' }
   }
 );
