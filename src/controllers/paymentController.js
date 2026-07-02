@@ -15,16 +15,16 @@
 //   const targetAmount = originalPayment.targetOrgAmount || originalPayment.amount;
 //   const totalPaidSoFar = (originalPayment.totalPaidSoFar || 0) + amountPaid;
 //   const remainingAmount = targetAmount - totalPaidSoFar;
-  
+
 //   console.log(`Partial payment detected: Target ${targetAmount}, Paid ${amountPaid}, Total Paid ${totalPaidSoFar}, Remaining ${remainingAmount}`);
-  
+
 //   // Calculate fees for this partial payment
 //   const paystackFee = amountPaid * 0.015 + (amountPaid >= 2500 ? 100 : 0);
 //   const finalPaystackFee = Math.min(paystackFee, 2000);
 //   const afterPaystack = amountPaid - finalPaystackFee;
 //   const platformFee = afterPaystack * 0.04;
 //   const netToOrg = afterPaystack - platformFee;
-  
+
 //   // Update original payment with partial payment info
 //   originalPayment.totalPaidSoFar = totalPaidSoFar;
 //   originalPayment.remainingAmount = remainingAmount;
@@ -43,15 +43,15 @@
 //     },
 //     notes: notes
 //   });
-  
+
 //   if (remainingAmount <= 0) {
 //     originalPayment.paidAt = new Date();
 //   }
-  
+
 //   await originalPayment.save();
-  
+
 //   let outstandingPayment = null;
-  
+
 //   // Create or update outstanding payment record for remaining amount
 //   if (remainingAmount > 0) {
 //     outstandingPayment = await Payment.findOne({
@@ -59,7 +59,7 @@
 //       type: 'outstanding',
 //       status: 'unpaid'
 //     });
-    
+
 //     if (outstandingPayment) {
 //       // Update existing outstanding payment
 //       outstandingPayment.amount = remainingAmount;
@@ -87,10 +87,10 @@
 //         dueDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
 //       });
 //     }
-    
+
 //     console.log(`Created/Updated outstanding payment record: ${outstandingPayment._id} for amount ${remainingAmount}`);
 //   }
-  
+
 //   // Record income for this partial payment
 //   await Income.create({
 //     amount: netToOrg,
@@ -108,7 +108,7 @@
 //       fees: { paystackFee: finalPaystackFee, platformFee }
 //     }
 //   });
-  
+
 //   // Record expenditures for fees
 //   if (finalPaystackFee > 0) {
 //     await Expenditure.create({
@@ -120,7 +120,7 @@
 //       metadata: { feeType: 'paystack', paymentId: originalPayment._id, isPartial: true }
 //     });
 //   }
-  
+
 //   if (platformFee > 0) {
 //     await Expenditure.create({
 //       amount: platformFee,
@@ -131,7 +131,7 @@
 //       metadata: { feeType: 'platform', paymentId: originalPayment._id, isPartial: true }
 //     });
 //   }
-  
+
 //   return {
 //     isPartial: true,
 //     paidAmount: amountPaid,
@@ -425,12 +425,12 @@
 // exports.getPublicSummary = async (req, res, next) => {
 //   try {
 //     const organizationId = req.user.organizationId;
-    
+
 //     let matchCondition = { status: 'paid' };
 //     if (organizationId && req.user.role !== 'super-admin' && req.user.role !== 'super_admin') {
 //       matchCondition.organizationId = organizationId;
 //     }
-    
+
 //     const [totalPaidResult, totalOutstandingResult, paymentCounts, monthlyPayments] = await Promise.all([
 //       Payment.aggregate([
 //         { $match: matchCondition },
@@ -461,7 +461,7 @@
 //         { $sort: { '_id.year': 1, '_id.month': 1 } }
 //       ])
 //     ]);
-    
+
 //     res.status(200).json({
 //       success: true,
 //       data: {
@@ -520,9 +520,9 @@
 //   try {
 //     const organizationId = req.user.organizationId;
 //     const userRole = req.user.role;
-    
+
 //     let query = { status: 'paid' };
-    
+
 //     if (userRole !== 'super-admin' && userRole !== 'super_admin') {
 //       if (!organizationId) {
 //         return res.status(400).json({
@@ -532,24 +532,24 @@
 //       }
 //       query.organizationId = organizationId;
 //     }
-    
+
 //     const payments = await Payment.find(query)
 //       .populate('user', 'name')
 //       .populate('paymentTypeId', 'name')
 //       .sort({ paidAt: -1 })
 //       .limit(200);
-    
+
 //     const incomeRecords = payments.map(payment => {
 //       let source = payment.paymentTypeId?.name || payment.type || 'Member Payment';
 //       source = source.split(' ').map(word =>
 //         word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()
 //       ).join(' ');
-      
+
 //       let description = payment.description || '';
 //       if (!description) {
 //         description = `${source} payment from ${payment.user?.name || 'Member'}`;
 //       }
-      
+
 //       return {
 //         _id: payment._id,
 //         amount: payment.netToOrganization || payment.amount,
@@ -563,9 +563,9 @@
 //         remainingAmount: payment.remainingAmount
 //       };
 //     });
-    
+
 //     const totalCollected = payments.reduce((sum, p) => sum + (p.netToOrganization || p.amount || 0), 0);
-    
+
 //     res.status(200).json({
 //       success: true,
 //       data: {
@@ -589,20 +589,20 @@
 //   try {
 //     const organizationId = req.user.organizationId;
 //     const { startDate, endDate, type } = req.query;
-    
+
 //     let matchCondition = { organizationId: organizationId };
-    
+
 //     if (startDate && endDate) {
 //       matchCondition.createdAt = {
 //         $gte: new Date(startDate),
 //         $lte: new Date(endDate)
 //       };
 //     }
-    
+
 //     if (type) {
 //       matchCondition.type = type;
 //     }
-    
+
 //     const [summary, byType, byStatus] = await Promise.all([
 //       Payment.aggregate([
 //         { $match: matchCondition },
@@ -627,7 +627,7 @@
 //         { $group: { _id: '$status', total: { $sum: '$amount' }, count: { $sum: 1 } } }
 //       ])
 //     ]);
-    
+
 //     res.status(200).json({
 //       success: true,
 //       data: {
@@ -669,26 +669,26 @@
 // exports.getAllPayments = async (req, res, next) => {
 //   try {
 //     const organizationId = req.user.organizationId;
-    
+
 //     console.log('Getting all payments for organization:', organizationId);
-    
+
 //     if (!organizationId && req.user.role !== 'super-admin') {
 //       return res.status(400).json({
 //         success: false,
 //         message: 'Organization ID not found for this user'
 //       });
 //     }
-    
+
 //     let query = {};
-    
+
 //     if (req.user.role === 'super-admin' || req.user.role === 'super_admin') {
 //       console.log('Super admin - fetching all payments');
 //     } else {
 //       query.organizationId = organizationId;
 //     }
-    
+
 //     const { status, type, userId, startDate, endDate, page = 1, limit = 20 } = req.query;
-    
+
 //     if (status) query.status = status;
 //     if (type) query.type = type;
 //     if (userId) query.user = userId;
@@ -698,9 +698,9 @@
 //         $lte: new Date(endDate)
 //       };
 //     }
-    
+
 //     const skip = (parseInt(page) - 1) * parseInt(limit);
-    
+
 //     const [payments, total] = await Promise.all([
 //       Payment.find(query)
 //         .populate('user', 'name email')
@@ -710,7 +710,7 @@
 //         .limit(parseInt(limit)),
 //       Payment.countDocuments(query)
 //     ]);
-    
+
 //     const totals = await Payment.aggregate([
 //       { $match: query },
 //       {
@@ -722,11 +722,11 @@
 //         }
 //       }
 //     ]);
-    
+
 //     const paidTotal = totals.find(t => t._id === 'paid')?.netTotal || 0;
 //     const unpaidTotal = totals.find(t => t._id === 'unpaid')?.total || 0;
 //     const partialTotal = totals.find(t => t._id === 'partial')?.total || 0;
-    
+
 //     res.status(200).json({
 //       success: true,
 //       data: {
@@ -859,7 +859,7 @@
 //     if (payment.parentPaymentId) {
 //       await Payment.deleteMany({ parentPaymentId: payment._id });
 //     }
-    
+
 //     if (payment.isPartial && payment.partialPayments?.length) {
 //       // Don't delete if there are partial payments
 //       return res.status(400).json({
@@ -1061,34 +1061,34 @@
 //   try {
 //     const { payments } = req.body;
 //     const organizationId = req.user.organizationId;
-    
+
 //     const successful = [];
 //     const failed = [];
-    
+
 //     for (const payment of payments) {
 //       try {
 //         const user = await User.findOne({
 //           _id: payment.userId,
 //           organizationId: organizationId
 //         });
-        
+
 //         if (!user) {
 //           failed.push({ ...payment, error: 'User not found in organization' });
 //           continue;
 //         }
-        
+
 //         const existingPayment = await Payment.findOne({
 //           user: payment.userId,
 //           type: payment.type,
 //           status: 'paid',
 //           organizationId: organizationId
 //         });
-        
+
 //         if (existingPayment) {
 //           failed.push({ ...payment, error: 'Payment already exists' });
 //           continue;
 //         }
-        
+
 //         const newPayment = await Payment.create({
 //           user: payment.userId,
 //           name: `${payment.type} payment`,
@@ -1104,13 +1104,13 @@
 //           status: 'unpaid',
 //           createdBy: req.user.id
 //         });
-        
+
 //         successful.push(newPayment);
 //       } catch (error) {
 //         failed.push({ ...payment, error: error.message });
 //       }
 //     }
-    
+
 //     res.status(201).json({
 //       success: true,
 //       data: {
@@ -1135,40 +1135,40 @@
 //   try {
 //     const { paymentId, amountPaid, reference, notes } = req.body;
 //     const organizationId = req.user.organizationId;
-    
+
 //     const originalPayment = await Payment.findOne({
 //       _id: paymentId,
 //       organizationId: organizationId
 //     }).populate('user', 'name email');
-    
+
 //     if (!originalPayment) {
 //       return res.status(404).json({
 //         success: false,
 //         message: 'Payment not found'
 //       });
 //     }
-    
+
 //     if (originalPayment.status === 'paid') {
 //       return res.status(400).json({
 //         success: false,
 //         message: 'Payment already completed'
 //       });
 //     }
-    
+
 //     if (!amountPaid || amountPaid <= 0) {
 //       return res.status(400).json({
 //         success: false,
 //         message: 'Valid amount is required'
 //       });
 //     }
-    
+
 //     const result = await handlePartialPayment(
 //       originalPayment,
 //       amountPaid,
 //       reference || `MANUAL-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
 //       notes
 //     );
-    
+
 //     res.status(200).json({
 //       success: true,
 //       data: {
@@ -2089,7 +2089,7 @@ exports.createMemberPayment = async (req, res, next) => {
       description: description || `${name} payment`,
       paymentTypeId: paymentTypeId || null,
       organizationId,
-      status: 'pending',
+      status: 'pending..',
       transactionReference: `PENDING-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
     });
 

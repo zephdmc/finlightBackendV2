@@ -116,7 +116,7 @@ const paymentSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['paid', 'unpaid', 'pending', 'partial'],
+    enum: ['paid', 'unpaid', 'pending..', 'partial'],
     default: 'unpaid',
     comment: 'partial status indicates partially paid with outstanding balance'
   },
