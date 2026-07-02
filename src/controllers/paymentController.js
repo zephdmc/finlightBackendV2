@@ -338,6 +338,7 @@ exports.markFineAsPaid = async (req, res, next) => {
 // @route   POST /api/payments
 // @access  Private/Admin
 exports.createPayment = async (req, res, next) => {
+    console.log('🔥🔥🔥 Admin createPayment WAS CALLED! 🔥🔥🔥');
     try {
         const { userId, name, type, amount, dueDate, description, paymentTypeId } = req.body;
         const organizationId = req.user.organizationId;
@@ -859,6 +860,8 @@ exports.getPaymentStats = async (req, res, next) => {
 // @route   POST /api/payments/member-payment
 // @access  Private
 exports.createMemberPayment = async (req, res, next) => {
+    console.log('🔥🔥🔥 createMemberPayment WAS CALLED! 🔥🔥🔥');
+    console.log('Request body:', req.body);
     try {
         const { name, type, amount, description, paymentTypeId } = req.body;
         const userId = req.user.id;
