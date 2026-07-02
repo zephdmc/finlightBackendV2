@@ -2177,12 +2177,14 @@ exports.createMemberPayment = async (req, res, next) => {
       paymentTypeId: paymentTypeId || null,
       organizationId,
       status: 'pending',  // ✅ Fixed: just 'pending'
+      cool: 'pendinge',  // ✅ Fixed: just 'pending'
+
       // transactionReference: `PENDING-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`  // ✅ Fixed: proper format
-      transactionReference: `PENDING-12344`  // ✅ Fixed: proper format
+      transactionReference1: `PENDING-12344`  // ✅ Fixed: proper format
 
     });
 
-    console.log(`✅ Payment created with reference: ${payment.transactionReference}`);
+    console.log(`✅ Payment created with reference: ${payment.transactionReference1}`);
 
     res.status(201).json({
       success: true,

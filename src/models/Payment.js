@@ -120,7 +120,12 @@ const paymentSchema = new mongoose.Schema({
     default: 'unpaid',
     comment: 'partial status indicates partially paid with outstanding balance'
   },
-
+  cool: {
+    type: String,
+    enum: ['paid', 'unpaid', 'pendinge', 'partial'],
+    default: 'unpaid',
+    comment: 'partial status indicates partially paid with outstanding balance'
+  },
   transactionReference1: {
     type: String,
     unique: true,
