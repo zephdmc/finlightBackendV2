@@ -2138,7 +2138,7 @@ exports.createMemberPayment = async (req, res, next) => {
       user: userId,
       paymentTypeId,
       organizationId,
-      status: { $in: ['unpaid', 'partial', 'pending...'] },
+      status: { $in: ['unpaid', 'partial', 'pending'] },
       remainingAmount: { $gt: 0 }
     });
 
@@ -2176,7 +2176,7 @@ exports.createMemberPayment = async (req, res, next) => {
       description: description || `${name} payment`,
       paymentTypeId: paymentTypeId || null,
       organizationId,
-      status: 'pending...',  // ✅ Fixed: just 'pending'
+      status: 'pending',  // ✅ Fixed: just 'pending'
       // transactionReference: `PENDING-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`  // ✅ Fixed: proper format
       transactionReference: `PENDING-12344`  // ✅ Fixed: proper format
 
