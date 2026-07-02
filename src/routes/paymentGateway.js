@@ -175,7 +175,7 @@
 //     amount: amountPaid,
 //     netToOrg: netToOrgFromThisPayment,
 //     date: new Date(),
-//     transactionReference: reference,
+//     transactionReference1: reference,
 //     fees: {
 //       paystackFee: fees.paystackFee,
 //       platformFee: fees.platformFee,
@@ -200,7 +200,7 @@
 //     description: `Partial payment of ₦${amountPaid.toLocaleString()} received. Fees: ₦${fees.totalFees.toLocaleString()}. Organization target: ₦${targetOrgAmount.toLocaleString()}, Remaining: ₦${remainingOrgTarget.toLocaleString()}`,
 //     paymentId: originalPayment._id,
 //     paymentType: originalPayment.type,
-//     transactionReference: reference,
+//     transactionReference1: reference,
 //     organizationId: originalPayment.user?.organizationId,
 //     createdBy: originalPayment.user?._id,
 //     metadata: {
@@ -369,7 +369,7 @@
 //       return res.status(400).json({ success: false, message: data.message || 'Failed to initialize payment' });
 //     }
 
-//     payment.transactionReference = data.data.reference;
+//     payment.transactionReference1 = data.data.reference;
 //     payment.paymentUrl = data.data.authorization_url;
 //     payment.expectedAmount = memberPayAmount;
 //     payment.targetOrgAmount = targetOrgAmount;
@@ -400,7 +400,7 @@
 //   if (verificationInProgress.has(reference)) {
 //     console.log('⏳ Verification already in progress for:', reference);
 //     await verificationInProgress.get(reference);
-//     const payment = await Payment.findOne({ transactionReference: reference });
+//     const payment = await Payment.findOne({ transactionReference1: reference });
 //     if (payment && payment.status === 'paid') {
 //       return res.status(200).json({
 //         success: true,
@@ -424,7 +424,7 @@
 //   try {
 //     console.log('🔍 Verifying payment:', reference);
 
-//     let payment = await Payment.findOne({ transactionReference: reference })
+//     let payment = await Payment.findOne({ transactionReference1: reference })
 //       .populate('user', 'name email organizationId');
 
 //     if (!payment) {
@@ -570,7 +570,7 @@
 //       const { reference, amount } = event.data;
 
 //       const payment = await Payment.findOne({
-//         transactionReference: reference,
+//         transactionReference1: reference,
 //         status: { $ne: 'paid' }
 //       }).populate('user', 'organizationId');
 
@@ -717,7 +717,7 @@
 //         amount: payment.amount,
 //         type: payment.type,
 //         paidAt: payment.paidAt,
-//         reference: payment.transactionReference,
+//         reference: payment.transactionReference1,
 //         remainingAmount: payment.remainingAmount,
 //         isPartial: payment.isPartial,
 //         totalPaidSoFar: payment.totalPaidSoFar
@@ -1090,7 +1090,7 @@ const processPartialPayment = async (originalPayment, amountPaid, reference, isM
     amount: amountPaid,
     netToOrg: netToOrgFromThisPayment,
     date: new Date(),
-    transactionReference: reference,
+    transactionReference1: reference,
     fees: {
       flutterwaveFee: fees.flutterwaveFee,
       platformFee: fees.platformFee,
@@ -1115,7 +1115,7 @@ const processPartialPayment = async (originalPayment, amountPaid, reference, isM
     description: `Partial payment of ₦${amountPaid.toLocaleString()} received. Fees: ₦${fees.totalFees.toLocaleString()}. Organization target: ₦${targetOrgAmount.toLocaleString()}, Remaining: ₦${remainingOrgTarget.toLocaleString()}`,
     paymentId: originalPayment._id,
     paymentType: originalPayment.type,
-    transactionReference: reference,
+    transactionReference1: reference,
     organizationId: originalPayment.user?.organizationId,
     createdBy: originalPayment.user?._id,
     metadata: {
@@ -1355,7 +1355,7 @@ router.post('/initialize', protect, paymentInitLimiter, validatePaymentInit, asy
     });
 
     if (response.status === 'success') {
-      payment.transactionReference = response.data.tx_ref;
+      payment.transactionReference1 = response.data.tx_ref;
       payment.paymentUrl = response.data.link;
       payment.expectedAmount = memberPayAmount;
       payment.targetOrgAmount = targetOrgAmount;
@@ -1402,7 +1402,7 @@ router.get('/verify/:reference', verifyLimiter, validatePaymentVerification, asy
   if (verificationInProgress.has(reference)) {
     console.log('⏳ Verification already in progress for:', reference);
     await verificationInProgress.get(reference);
-    const payment = await Payment.findOne({ transactionReference: reference });
+    const payment = await Payment.findOne({ transactionReference1: reference });
     if (payment && payment.status === 'paid') {
       return res.status(200).json({
         success: true,
@@ -1423,8 +1423,8 @@ router.get('/verify/:reference', verifyLimiter, validatePaymentVerification, asy
   try {
     console.log('🔍 Verifying payment with reference:', reference);
 
-    // First try to find by transactionReference
-    let payment = await Payment.findOne({ transactionReference: reference })
+    // First try to find by transactionReference1
+    let payment = await Payment.findOne({ transactionReference1: reference })
       .populate('user', 'name email organizationId');
 
     // If not found, try to extract payment ID from reference
@@ -1450,7 +1450,7 @@ router.get('/verify/:reference', verifyLimiter, validatePaymentVerification, asy
       status: payment.status,
       paymentTypeId: payment.paymentTypeId,
       amount: payment.amount,
-      transactionReference: payment.transactionReference
+      transactionReference1: payment.transactionReference1
     });
 
     // If already paid, return success
@@ -1514,7 +1514,7 @@ router.get('/verify/:reference', verifyLimiter, validatePaymentVerification, asy
               remainingAmount: 0,
               isPartial: false,
               completedAt: new Date(),
-              transactionReference: reference
+              transactionReference1: reference
             }
           },
           { new: true }
@@ -1630,7 +1630,7 @@ router.post('/webhook', webhookLimiter, async (req, res) => {
       const { tx_ref, amount } = event.data;
       // Check if payment was already processed
       const existingPayment = await Payment.findOne({
-        transactionReference: tx_ref,
+        transactionReference1: tx_ref,
         status: 'paid'
       });
       if (existingPayment) {
@@ -1640,7 +1640,7 @@ router.post('/webhook', webhookLimiter, async (req, res) => {
       const amountPaid = amount; // already in NGN
 
       const payment = await Payment.findOne({
-        transactionReference: tx_ref,
+        transactionReference1: tx_ref,
         status: { $ne: 'paid' }
       }).populate('user', 'organizationId');
 
@@ -1664,7 +1664,7 @@ router.post('/webhook', webhookLimiter, async (req, res) => {
                 remainingAmount: 0,
                 isPartial: false,
                 completedAt: new Date(),
-                transactionReference: tx_ref  // ✅ ADD THIS LINE
+                transactionReference1: tx_ref  // ✅ ADD THIS LINE
               }
             }
           );
@@ -1763,7 +1763,7 @@ router.get('/status/:paymentId', protect, statusCheckLimiter, ValidationMiddlewa
         amount: payment.amount,
         type: payment.type,
         paidAt: payment.paidAt,
-        reference: payment.transactionReference,
+        reference: payment.transactionReference1,
         remainingAmount: payment.remainingAmount,
         isPartial: payment.isPartial,
         totalPaidSoFar: payment.totalPaidSoFar

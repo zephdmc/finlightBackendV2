@@ -75,7 +75,7 @@ const paymentSchema = new mongoose.Schema({
       default: Date.now,
       comment: 'Date of partial payment'
     },
-    transactionReference: {
+    transactionReference1: {
       type: String,
       comment: 'Transaction reference for this partial payment'
     },
@@ -126,7 +126,7 @@ const paymentSchema = new mongoose.Schema({
     default: 'unpaid',
     comment: 'partial status indicates partially paid with outstanding balance'
   },
-  transactionReference: {
+  transactionReference1: {
     type: String,
     unique: true,
     sparse: true
@@ -255,7 +255,7 @@ paymentSchema.methods.addPartialPayment = function (partialData) {
     amount: partialData.amount,
     netToOrg: partialData.netToOrg,
     date: partialData.date || new Date(),
-    transactionReference: partialData.transactionReference,
+    transactionReference1: partialData.transactionReference1,
     fees: partialData.fees || {
       flutterwaveFee: 0,
       platformFee: 0,
@@ -375,7 +375,7 @@ paymentSchema.index({ organizationId: 1, platformFeeDeducted: 1 });
 paymentSchema.index({ organizationId: 1, netToOrganization: 1 });
 
 // Transaction reference remains globally unique
-paymentSchema.index({ transactionReference: 1 }, { unique: true, sparse: true });
+paymentSchema.index({ transactionReference1: 1 }, { unique: true, sparse: true });
 
 // Compound index for user outstanding queries
 paymentSchema.index({ user: 1, organizationId: 1, status: 1, remainingAmount: 1 });
