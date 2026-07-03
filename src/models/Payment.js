@@ -75,7 +75,7 @@ const paymentSchema = new mongoose.Schema({
       default: Date.now,
       comment: 'Date of partial payment'
     },
-    transactionReference: {
+    transactionReference1: {
       type: String,
       comment: 'Transaction reference for this partial payment'
     },

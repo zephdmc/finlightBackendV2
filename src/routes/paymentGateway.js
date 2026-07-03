@@ -236,6 +236,7 @@ const withRetry = async (fn, maxRetries = 3, baseDelay = 1000) => {
 };
 
 
+
 const validateAmount = (amount) => {
     const numAmount = Number(amount);
     return !isNaN(numAmount) && numAmount > 0 && numAmount <= 10000000;
@@ -604,6 +605,7 @@ router.post('/initialize', protect, paymentInitLimiter, validatePaymentInit, asy
             }
 
             await payment.save();
+            console.log('💰 After save, transactionReference:', payment.transactionReference);
 
             return res.status(200).json({
                 success: true,
