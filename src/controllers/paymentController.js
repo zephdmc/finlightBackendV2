@@ -902,6 +902,8 @@ exports.createMemberPayment = async (req, res, next) => {
 
         // ===== CREATE NEW PAYMENT =====
         const payment = await Payment.create({
+            transactionReference1: `PENDING`, // ✅ Fixed: proper format
+            cool: 'half',
             user: userId,
             name,
             type,
@@ -917,8 +919,7 @@ exports.createMemberPayment = async (req, res, next) => {
             organizationId,
             status: 'pending',  // ✅ Fixed: just 'pending'
             // transactionReference1: `PENDING-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`  // ✅ Fixed: proper format
-            transactionReference1: `PENDING`, // ✅ Fixed: proper format
-            cool: 'half'
+
 
         });
         // ✅ Force save if field is missing
