@@ -916,12 +916,13 @@ exports.createMemberPayment = async (req, res, next) => {
             paymentTypeId: paymentTypeId || null,
             organizationId,
             status: 'pending',  // ✅ Fixed: just 'pending'
-            transactionReference1: `PENDING-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`  // ✅ Fixed: proper format
+            // transactionReference1: `PENDING-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`  // ✅ Fixed: proper format
+            transactionReference1: `PENDING`, // ✅ Fixed: proper format
 
         });
         // ✅ Force save if field is missing
-        if (!payment.transactionReference) {
-            console.log('⚠️ transactionReference missing, forcing update...');
+        if (!payment.transactionReference1) {
+            console.log('⚠️ transactionReference1 missing, forcing update...');
             await Payment.findByIdAndUpdate(payment._id, {
                 $set: { transactionReference1: `PENDING-${Date.now()}-${Math.random().toString(36).substr(2, 9)}` }
             });
