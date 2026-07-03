@@ -79,6 +79,10 @@ const paymentSchema = new mongoose.Schema({
       type: String,
       comment: 'Transaction reference for this partial payment'
     },
+    cool: {
+      type: String,
+      comment: 'Cool reference for this partial payment'
+    },
     fees: {
       flutterwaveFee: {
         type: Number,
