@@ -594,11 +594,8 @@ router.post('/initialize', protect, paymentInitLimiter, validatePaymentInit, asy
             console.log('📥 Full Flutterwave response:', JSON.stringify(response, null, 2));
 
             // Try to get tx_ref from response, or fallback to existing
-            const txRef = response.data?.tx_ref ||
-                response.data?.data?.tx_ref ||
-                response.data?.link?.split('/pay/')[1] ||
-                payment.transactionReference;  // ✅ Fallback to existing
-
+            // ✅ Correct: Using your own PAY- reference
+            const txRef = uniqueRef;  // Use the reference you generated
             console.log('🔄 Extracted tx_ref:', txRef);
 
             const link = response.data?.link || response.data?.data?.link;
