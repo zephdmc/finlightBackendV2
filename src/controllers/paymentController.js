@@ -899,7 +899,7 @@ exports.createMemberPayment = async (req, res, next) => {
                 message
             });
         }
-
+        let transactionReference1 = `PENDING-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
         // ===== CREATE NEW PAYMENT =====
         const payment = await Payment.create({
             user: userId,
@@ -917,8 +917,8 @@ exports.createMemberPayment = async (req, res, next) => {
             organizationId,
             cool: 'obo',
             status: 'pending',  // ✅ Fixed: just 'pending'
-            // transactionReference: `PENDING-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`  // ✅ Fixed: proper format
-            transactionReference: `PENDING22`  // ✅ Fixed: proper format
+            transactionReference: transactionReference1  // ✅ Fixed: proper format
+
 
 
         });
