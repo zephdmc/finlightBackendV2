@@ -430,62 +430,219 @@ const validatePaymentVerification = [
         .isLength({ min: 10, max: 100 }),
     ValidationMiddleware.validate
 ];
+// ==================== PAYMENT INITIALIZATION (FLUTTERWAVE WITH TWO SUBACCOUNTS) ====================
+router.post('/initialize', protect, paymentInitLimiter, validatePaymentInit, async (req, res) => {
+    console.log('🔥🔥🔥 /initialize route was called! 🔥🔥🔥');
+    console.log('Request body:', req.body);
+    console.log('User:', req.user?.id);
 
+    try {
+        console.log('🔍 Flutterwave SDK status:', {
+            hasFlw: !!flw,
+            hasPayment: !!(flw?.Payment),
+            hasInitiate: typeof flw?.Payment?.initiate === 'function'
+        });
 
+        const { paymentId, idempotencyKey, amount: customAmount } = req.body;
+        console.log('📦 Payment initialization:', { paymentId, customAmount });
 
+        const payment = await Payment.findById(paymentId).populate('user', 'name email organizationId');
+        if (!payment) {
+            return res.status(404).json({ success: false, message: 'Payment not found' });
+        }
 
-if (response.status === 'success') {
-    // ===== DEBUG: Log the full response =====
-    console.log('📥 Full Flutterwave response:', JSON.stringify(response, null, 2));
+        // ===== DEBUG: Log the payment BEFORE initialization =====
+        console.log('📋 Payment BEFORE initialization:', {
+            id: payment._id,
+            status: payment.status,
+            transactionReference: payment.transactionReference,  // Should show "PENDING-..."
+            amount: payment.amount,
+            name: payment.name
+        });
 
-    // Get the tx_ref from the correct location
-    const txRef = response.data?.tx_ref || response.data?.data?.tx_ref || response.tx_ref;
+        if (payment.user._id.toString() !== req.user.id && req.user.role !== 'admin') {
+            return res.status(403).json({ success: false, message: 'Not authorized' });
+        }
+        if (payment.status === 'paid') {
+            return res.status(400).json({ success: false, message: 'Payment already completed' });
+        }
+        if (payment.createdAt < new Date(Date.now() - 24 * 60 * 60 * 1000)) {
+            return res.status(400).json({
+                success: false,
+                message: 'Payment request has expired (24 hours). Please create a new one.'
+            });
+        }
+        if (!PLATFORM_SUBACCOUNT_ID) {
+            console.error('❌ PLATFORM_SUBACCOUNT_ID is not set in environment');
+            return res.status(500).json({
+                success: false,
+                message: 'Platform configuration error. Please contact support.'
+            });
+        }
 
-    console.log('🔄 Extracted tx_ref:', txRef);
+        const targetOrgAmount = payment.amount;
+        const isPartialPayment = customAmount && customAmount > 0 && customAmount < targetOrgAmount;
 
-    if (!txRef) {
-        console.error('❌ No tx_ref found in Flutterwave response');
-        throw new Error('No transaction reference received from Flutterwave');
+        let memberPayAmount;
+        if (customAmount && customAmount > 0) {
+            memberPayAmount = customAmount;
+            console.log(`💰 Custom amount provided: ₦${memberPayAmount} (${isPartialPayment ? 'PARTIAL' : 'FULL'})`);
+        } else {
+            memberPayAmount = calculateMemberPayAmount(targetOrgAmount);
+            console.log(`💰 Calculated amount: ₦${memberPayAmount} (FULL)`);
+        }
+
+        if (!validateAmount(memberPayAmount)) {
+            return res.status(400).json({ success: false, message: 'Invalid payment amount calculation' });
+        }
+
+        // Get organization's Flutterwave subaccount ID
+        let organizationSubaccountId = null;
+        let organization = null;
+        if (payment.user.organizationId) {
+            organization = await Organization.findById(payment.user.organizationId);
+            if (organization?.flutterwave?.subaccountCode) {
+                organizationSubaccountId = organization.flutterwave.subaccountCode;
+                console.log(`✅ Organization subaccount Code: ${organizationSubaccountId}`);
+            } else {
+                console.log(`⚠️ No Flutterwave subaccount for organization: ${payment.user.organizationId}`);
+            }
+        }
+
+        if (!organizationSubaccountId) {
+            return res.status(400).json({
+                success: false,
+                message: 'Organization payment setup incomplete. Please contact admin.'
+            });
+        }
+
+        if (!PLATFORM_SUBACCOUNT_ID) {
+            return res.status(500).json({
+                success: false,
+                message: 'Platform configuration error. Please contact support.'
+            });
+        }
+
+        const platformFeeAmount = Math.round(memberPayAmount * 0.02);
+        const organizationAmount = memberPayAmount - platformFeeAmount;
+        const uniqueRef = `PAY-${payment._id}-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
+        const effectiveOrgPercentage = (96 / 98) * 100;
+
+        const subaccounts = [
+            {
+                id: organizationSubaccountId,
+                transaction_split_type: 'percentage',
+                transaction_split_value: effectiveOrgPercentage
+            }
+        ];
+        console.log('📤 Split configuration:', {
+            organizationSubaccount: organizationSubaccountId,
+            organizationGets: organizationAmount,
+            platformSubaccount: PLATFORM_SUBACCOUNT_ID,
+            platformGets: platformFeeAmount,
+            memberPays: memberPayAmount
+        });
+
+        const payload = {
+            tx_ref: uniqueRef,
+            amount: memberPayAmount,
+            redirect_url: `${FRONTEND_URL}/payment-verify`,
+            customer: {
+                email: payment.user.email,
+                name: payment.user.name || 'Member'
+            },
+            subaccounts: subaccounts,
+            meta: {
+                payment_id: payment._id.toString(),
+                user_id: payment.user._id.toString(),
+                target_org_amount: targetOrgAmount,
+                member_pay_amount: memberPayAmount,
+                platform_fee: platformFeeAmount,
+                is_partial_payment: isPartialPayment,
+                custom_amount: customAmount || null,
+                remaining_balance: isPartialPayment ? targetOrgAmount - customAmount : 0
+            }
+        };
+
+        console.log('📤 Sending to Flutterwave with split:', payload);
+
+        console.log('🔄 Using direct API call to Flutterwave...');
+        const response = await withRetry(async () => {
+            const axiosResponse = await axios.post(
+                'https://api.flutterwave.com/v3/payments',
+                payload,
+                {
+                    headers: {
+                        'Authorization': `Bearer ${FLW_SECRET_KEY}`,
+                        'Content-Type': 'application/json'
+                    },
+                    timeout: 30000
+                }
+            );
+            console.log('📥 Flutterwave API response status:', axiosResponse.data.status);
+            return axiosResponse.data;
+        });
+
+        if (response.status === 'success') {
+            // ===== DEBUG: Log the full response =====
+            console.log('📥 Full Flutterwave response:', JSON.stringify(response, null, 2));
+
+            // Get the tx_ref from the correct location
+            const txRef = response.data?.tx_ref || response.data?.data?.tx_ref || response.tx_ref;
+
+            console.log('🔄 Extracted tx_ref:', txRef);
+
+            if (!txRef) {
+                console.error('❌ No tx_ref found in Flutterwave response');
+                throw new Error('No transaction reference received from Flutterwave');
+            }
+
+            // ===== DEBUG: Log BEFORE updating transactionReference =====
+            console.log('🔄 BEFORE updating transactionReference:', {
+                oldReference: payment.transactionReference,
+                newReference: txRef
+            });
+
+            payment.transactionReference = txRef;
+            payment.paymentUrl = response.data.link || response.data.data?.link;
+            payment.expectedAmount = memberPayAmount;
+            payment.targetOrgAmount = targetOrgAmount;
+
+            if (isPartialPayment) {
+                payment.isPartial = true;
+                payment.remainingAmount = targetOrgAmount - customAmount;
+                payment.totalPaidSoFar = 0;
+            }
+
+            await payment.save();
+            console.log('💰 AFTER save, transactionReference:', payment.transactionReference);
+
+            const verifyPayment = await Payment.findById(payment._id);
+            console.log('✅ VERIFY from database, transactionReference:', verifyPayment.transactionReference);
+
+            return res.status(200).json({
+                success: true,
+                data: {
+                    authorizationUrl: response.data.link || response.data.data?.link,
+                    reference: txRef,
+                    memberPayAmount,
+                    targetOrgAmount,
+                    isPartialPayment,
+                    remainingBalance: isPartialPayment ? targetOrgAmount - customAmount : 0
+                },
+                message: isPartialPayment
+                    ? `Partial payment of ₦${memberPayAmount} initialized. Remaining balance: ₦${targetOrgAmount - customAmount}`
+                    : 'Payment initialized successfully'
+            });
+        } else {
+            throw new Error(response.message || 'Flutterwave initialization failed');
+        }
+    } catch (error) {
+        console.error('❌ Payment initialization error:', error);
+        console.error('❌ Error details:', error.response?.data || error.message);
+        res.status(500).json({ success: false, message: error.message || 'Internal server error' });
     }
-
-    // ===== DEBUG: Log BEFORE updating transactionReference =====
-    console.log('🔄 BEFORE updating transactionReference:', {
-        oldReference: payment.transactionReference,
-        newReference: txRef
-    });
-
-    payment.transactionReference = txRef;
-    payment.paymentUrl = response.data.link || response.data.data?.link;
-    payment.expectedAmount = memberPayAmount;
-    payment.targetOrgAmount = targetOrgAmount;
-
-    if (isPartialPayment) {
-        payment.isPartial = true;
-        payment.remainingAmount = targetOrgAmount - customAmount;
-        payment.totalPaidSoFar = 0;
-    }
-
-    await payment.save();
-    console.log('💰 AFTER save, transactionReference:', payment.transactionReference);
-
-    const verifyPayment = await Payment.findById(payment._id);
-    console.log('✅ VERIFY from database, transactionReference:', verifyPayment.transactionReference);
-
-    return res.status(200).json({
-        success: true,
-        data: {
-            authorizationUrl: response.data.link || response.data.data?.link,
-            reference: txRef,
-            memberPayAmount,
-            targetOrgAmount,
-            isPartialPayment,
-            remainingBalance: isPartialPayment ? targetOrgAmount - customAmount : 0
-        },
-        message: isPartialPayment
-            ? `Partial payment of ₦${memberPayAmount} initialized. Remaining balance: ₦${targetOrgAmount - customAmount}`
-            : 'Payment initialized successfully'
-    });
-}
+});
 
 // ==================== PAYMENT VERIFICATION ====================
 // ==================== PAYMENT VERIFICATION ====================
