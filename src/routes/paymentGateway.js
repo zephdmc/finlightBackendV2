@@ -584,27 +584,28 @@ router.post('/initialize', protect, paymentInitLimiter, validatePaymentInit, asy
         });
 
         if (response.status === 'success') {
-            // ===== DEBUG: Log the full response =====
             console.log('📥 Full Flutterwave response:', JSON.stringify(response, null, 2));
 
-            // Get the tx_ref from the correct location
-            const txRef = response.data?.tx_ref || response.data?.data?.tx_ref || response.tx_ref;
+            // Try to get tx_ref from response, or fallback to existing
+            const txRef = response.data?.tx_ref ||
+                response.data?.data?.tx_ref ||
+                response.data?.link?.split('/pay/')[1] ||
+                payment.transactionReference;  // ✅ Fallback to existing
 
             console.log('🔄 Extracted tx_ref:', txRef);
 
-            if (!txRef) {
-                console.error('❌ No tx_ref found in Flutterwave response');
-                throw new Error('No transaction reference received from Flutterwave');
+            const link = response.data?.link || response.data?.data?.link;
+            console.log('🔄 Extracted link:', link);
+
+            // Only update if we got a new reference
+            if (txRef && txRef !== payment.transactionReference) {
+                payment.transactionReference = txRef;
+                console.log('✅ Updated transactionReference from Flutterwave:', txRef);
+            } else {
+                console.log('ℹ️ Keeping existing transactionReference:', payment.transactionReference);
             }
 
-            // ===== DEBUG: Log BEFORE updating transactionReference =====
-            console.log('🔄 BEFORE updating transactionReference:', {
-                oldReference: payment.transactionReference,
-                newReference: txRef
-            });
-
-            payment.transactionReference = txRef;
-            payment.paymentUrl = response.data.link || response.data.data?.link;
+            payment.paymentUrl = link;
             payment.expectedAmount = memberPayAmount;
             payment.targetOrgAmount = targetOrgAmount;
 
@@ -623,8 +624,8 @@ router.post('/initialize', protect, paymentInitLimiter, validatePaymentInit, asy
             return res.status(200).json({
                 success: true,
                 data: {
-                    authorizationUrl: response.data.link || response.data.data?.link,
-                    reference: txRef,
+                    authorizationUrl: link,
+                    reference: payment.transactionReference,
                     memberPayAmount,
                     targetOrgAmount,
                     isPartialPayment,
