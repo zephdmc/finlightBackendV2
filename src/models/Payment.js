@@ -26,18 +26,6 @@ const paymentSchema = new mongoose.Schema({
     min: 0,
     comment: 'What organization should receive (target amount)'
   },
-  transactionReference1: {
-    type: String,
-    comment: 'Transaction reference for this partial payment'
-  },
-  transactionReference1: {
-    type: String,
-    comment: 'Transaction reference for this partial payment'
-  },
-  cool: {
-    type: String,
-    comment: 'Cool reference for this partial payment'
-  },
 
   // ==================== PARTIAL PAYMENT FIELDS ====================
   targetOrgAmount: {
@@ -87,7 +75,14 @@ const paymentSchema = new mongoose.Schema({
       default: Date.now,
       comment: 'Date of partial payment'
     },
-
+    transactionReference: {
+      type: String,
+      comment: 'Transaction reference for this partial payment'
+    },
+    cool: {
+      type: String,
+      comment: 'Cool reference for this partial payment'
+    },
     fees: {
       flutterwaveFee: {
         type: Number,
