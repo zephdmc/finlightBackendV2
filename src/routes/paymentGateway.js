@@ -424,9 +424,16 @@ const validatePaymentInit = [
     ValidationMiddleware.validate
 ];
 
+// const validatePaymentVerification = [
+//     param('reference').notEmpty().withMessage('Transaction reference is required')
+//         .matches(/^PAY-[a-f0-9]+-\d+-[a-z0-9]+$/i).withMessage('Invalid reference format')
+//         .isLength({ min: 10, max: 100 }),
+//     ValidationMiddleware.validate
+// ];
+
 const validatePaymentVerification = [
     param('reference').notEmpty().withMessage('Transaction reference is required')
-        .matches(/^PAY-[a-f0-9]+-\d+-[a-z0-9]+$/i).withMessage('Invalid reference format')
+        .matches(/^(PAY-[a-f0-9]+-\d+-[a-z0-9]+|flwlnk-[a-z0-9]+)$/i).withMessage('Invalid reference format')
         .isLength({ min: 10, max: 100 }),
     ValidationMiddleware.validate
 ];
