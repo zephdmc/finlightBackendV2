@@ -430,15 +430,11 @@ const validatePaymentVerification = [
         .isLength({ min: 10, max: 100 }),
     ValidationMiddleware.validate
 ];
-
-// ==================== PAYMENT INITIALIZATION (FLUTTERWAVE WITH TWO SUBACCOUNTS) ====================
 // ==================== PAYMENT INITIALIZATION (FLUTTERWAVE WITH TWO SUBACCOUNTS) ====================
 router.post('/initialize', protect, paymentInitLimiter, validatePaymentInit, async (req, res) => {
-    // ===== ADD THIS AT THE VERY START =====
     console.log('🔥🔥🔥 /initialize route was called! 🔥🔥🔥');
     console.log('Request body:', req.body);
     console.log('User:', req.user?.id);
-    // ========================================
 
     try {
         console.log('🔍 Flutterwave SDK status:', {
@@ -454,13 +450,22 @@ router.post('/initialize', protect, paymentInitLimiter, validatePaymentInit, asy
         if (!payment) {
             return res.status(404).json({ success: false, message: 'Payment not found' });
         }
+
+        // ===== DEBUG: Log the payment BEFORE initialization =====
+        console.log('📋 Payment BEFORE initialization:', {
+            id: payment._id,
+            status: payment.status,
+            transactionReference: payment.transactionReference,  // Should show "PENDING-..."
+            amount: payment.amount,
+            name: payment.name
+        });
+
         if (payment.user._id.toString() !== req.user.id && req.user.role !== 'admin') {
             return res.status(403).json({ success: false, message: 'Not authorized' });
         }
         if (payment.status === 'paid') {
             return res.status(400).json({ success: false, message: 'Payment already completed' });
         }
-        // ===== ADD THIS EXPIRY CHECK =====
         if (payment.createdAt < new Date(Date.now() - 24 * 60 * 60 * 1000)) {
             return res.status(400).json({
                 success: false,
@@ -478,7 +483,6 @@ router.post('/initialize', protect, paymentInitLimiter, validatePaymentInit, asy
         const targetOrgAmount = payment.amount;
         const isPartialPayment = customAmount && customAmount > 0 && customAmount < targetOrgAmount;
 
-        // Use custom amount if provided, otherwise calculate
         let memberPayAmount;
         if (customAmount && customAmount > 0) {
             memberPayAmount = customAmount;
@@ -497,7 +501,6 @@ router.post('/initialize', protect, paymentInitLimiter, validatePaymentInit, asy
         let organization = null;
         if (payment.user.organizationId) {
             organization = await Organization.findById(payment.user.organizationId);
-            // ===== FIX: Use subaccountCode instead of subaccountId =====
             if (organization?.flutterwave?.subaccountCode) {
                 organizationSubaccountId = organization.flutterwave.subaccountCode;
                 console.log(`✅ Organization subaccount Code: ${organizationSubaccountId}`);
@@ -520,25 +523,17 @@ router.post('/initialize', protect, paymentInitLimiter, validatePaymentInit, asy
             });
         }
 
-
-        // Calculate amounts
-        const platformFeeAmount = Math.round(memberPayAmount * 0.02);  // 2% platform fee = ₦2
-        const organizationAmount = memberPayAmount - platformFeeAmount; // 96% organization = ₦103
+        const platformFeeAmount = Math.round(memberPayAmount * 0.02);
+        const organizationAmount = memberPayAmount - platformFeeAmount;
         const uniqueRef = `PAY-${payment._id}-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
-        // ===== FIX: Percentage split with effective values =====
-        // Since Flutterwave takes 2% first, we need to adjust the percentage
-        // Organization should get 92% of original amount
-        // After Flutterwave takes 2%, 98% remains
-        // So organization should get: 94/98 = 95.92% of the remaining amount
         const effectiveOrgPercentage = (96 / 98) * 100;
 
         const subaccounts = [
             {
                 id: organizationSubaccountId,
                 transaction_split_type: 'percentage',
-                transaction_split_value: effectiveOrgPercentage  // ~95.92%
+                transaction_split_value: effectiveOrgPercentage
             }
-            // Platform fee (2%) stays in merchant account automatically
         ];
         console.log('📤 Split configuration:', {
             organizationSubaccount: organizationSubaccountId,
@@ -548,11 +543,9 @@ router.post('/initialize', protect, paymentInitLimiter, validatePaymentInit, asy
             memberPays: memberPayAmount
         });
 
-
         const payload = {
             tx_ref: uniqueRef,
             amount: memberPayAmount,
-            // currency: "NGN",
             redirect_url: `${FRONTEND_URL}/payment-verify`,
             customer: {
                 email: payment.user.email,
@@ -573,7 +566,6 @@ router.post('/initialize', protect, paymentInitLimiter, validatePaymentInit, asy
 
         console.log('📤 Sending to Flutterwave with split:', payload);
 
-        // ===== FIX: USE DIRECT API CALL INSTEAD OF SDK =====
         console.log('🔄 Using direct API call to Flutterwave...');
         const response = await withRetry(async () => {
             const axiosResponse = await axios.post(
@@ -592,20 +584,34 @@ router.post('/initialize', protect, paymentInitLimiter, validatePaymentInit, asy
         });
 
         if (response.status === 'success') {
+            // ===== DEBUG: Log BEFORE setting transactionReference =====
+            console.log('🔄 BEFORE updating transactionReference:', {
+                oldReference: payment.transactionReference,  // Should be "PENDING-..."
+                newReference: response.data.tx_ref          // Should be "PAY-..."
+            });
+
             payment.transactionReference = response.data.tx_ref;
             payment.paymentUrl = response.data.link;
             payment.expectedAmount = memberPayAmount;
             payment.targetOrgAmount = targetOrgAmount;
 
-            // If partial payment, mark it
             if (isPartialPayment) {
                 payment.isPartial = true;
                 payment.remainingAmount = targetOrgAmount - customAmount;
                 payment.totalPaidSoFar = 0;
             }
 
+            // ===== DEBUG: Log BEFORE saving =====
+            console.log('🔄 BEFORE save, transactionReference:', payment.transactionReference);
+
             await payment.save();
-            console.log('💰 After save, transactionReference:', payment.transactionReference);
+
+            // ===== DEBUG: Log AFTER saving =====
+            console.log('💰 AFTER save, transactionReference:', payment.transactionReference);
+
+            // ===== DEBUG: Verify by fetching from database =====
+            const verifyPayment = await Payment.findById(payment._id);
+            console.log('✅ VERIFY from database, transactionReference:', verifyPayment.transactionReference);
 
             return res.status(200).json({
                 success: true,
@@ -625,12 +631,11 @@ router.post('/initialize', protect, paymentInitLimiter, validatePaymentInit, asy
             throw new Error(response.message || 'Flutterwave initialization failed');
         }
     } catch (error) {
-        console.error('Payment initialization error:', error);
-        console.error('Error details:', error.response?.data || error.message);
+        console.error('❌ Payment initialization error:', error);
+        console.error('❌ Error details:', error.response?.data || error.message);
         res.status(500).json({ success: false, message: error.message || 'Internal server error' });
     }
 });
-
 
 // ==================== PAYMENT VERIFICATION ====================
 // ==================== PAYMENT VERIFICATION ====================
