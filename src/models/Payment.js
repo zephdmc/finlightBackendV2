@@ -31,6 +31,12 @@ const paymentSchema = new mongoose.Schema({
     required: true,
     comment: 'What organization should receive (target amount)'
   },
+  transactionReference: {
+    type: String,
+    required: true,
+    // unique: true,  // ❌ REMOVE THIS LINE
+    sparse: true
+  },
 
   // ==================== PARTIAL PAYMENT FIELDS ====================
   targetOrgAmount: {
@@ -80,10 +86,10 @@ const paymentSchema = new mongoose.Schema({
       default: Date.now,
       comment: 'Date of partial payment'
     },
-    // transactionReference: {
-    //   type: String,
-    //   comment: 'Transaction reference for this partial payment'
-    // },
+    transactionReference: {
+      type: String,
+      comment: 'Transaction reference for this partial payment'
+    },
 
     fees: {
       flutterwaveFee: {
@@ -126,11 +132,7 @@ const paymentSchema = new mongoose.Schema({
     default: 'unpaid',
     comment: 'partial status indicates partially paid with outstanding balance'
   },
-  transactionReference: {
-    type: String,
-    // unique: true,  // ❌ REMOVE THIS LINE
-    sparse: true
-  },
+
   paidAt: {
     type: Date
   },
