@@ -902,7 +902,6 @@ exports.createMemberPayment = async (req, res, next) => {
 
         // ===== CREATE NEW PAYMENT =====
         const payment = await Payment.create({
-            cool: 'half',
             user: userId,
             name,
             type,
