@@ -900,6 +900,7 @@ exports.createMemberPayment = async (req, res, next) => {
             });
         }
         let transactionReference1 = `PENDING-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        console.log(`Generated transaction reference: ${transactionReference1}`);
         // ===== CREATE NEW PAYMENT =====
         const payment = await Payment.create({
             user: userId,
