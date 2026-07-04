@@ -29,7 +29,7 @@ const paymentSchema = new mongoose.Schema({
 
   transactionReference: {
     type: String,
-    required: true,
+    // required: true,
     // unique: true,  // ❌ REMOVE THIS LINE
     sparse: true
   },
