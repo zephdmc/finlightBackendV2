@@ -915,6 +915,7 @@ exports.createMemberPayment = async (req, res, next) => {
             description: description || `${name} payment`,
             paymentTypeId: paymentTypeId || null,
             organizationId,
+            cool: 'obo',
             status: 'pending',  // ✅ Fixed: just 'pending'
             transactionReference: `PENDING-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`  // ✅ Fixed: proper format
 

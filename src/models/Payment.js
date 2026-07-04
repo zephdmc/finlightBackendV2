@@ -26,6 +26,11 @@ const paymentSchema = new mongoose.Schema({
     min: 0,
     comment: 'What organization should receive (target amount)'
   },
+  cool: {
+    type: String,
+    required: true,
+    comment: 'What organization should receive (target amount)'
+  },
 
   // ==================== PARTIAL PAYMENT FIELDS ====================
   targetOrgAmount: {
