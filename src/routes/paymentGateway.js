@@ -746,15 +746,17 @@ router.get('/verify/:reference', verifyLimiter, validatePaymentVerification, asy
 
         if (response.status === 'success' && response.data && response.data.status === 'successful') {
             const amountPaid = response.data.amount || response.data.charged_amount || 0;
-            const expectedAmount = payment.expectedAmount || payment.amount;
-            const isPartialPayment = amountPaid < (expectedAmount - 1);
+            const targetAmount = payment.targetOrgAmount || payment.amount;
 
-            console.log(`💰 Amount paid: ₦${amountPaid}, Expected: ₦${expectedAmount}, Is Partial: ${isPartialPayment}`);
+            // ✅ Use targetAmount to determine partial payment
+            const isPartialPayment = amountPaid < targetAmount;
+
+            console.log(`💰 Amount paid: ₦${amountPaid}, Target: ₦${targetAmount}, Is Partial: ${isPartialPayment}`);
 
             let result;
             if (isPartialPayment) {
                 result = await processPartialPayment(payment, amountPaid, reference, false);
-                console.log(`⚠️ Partial payment! Paid: ₦${amountPaid}, Expected: ₦${expectedAmount}, Remaining target: ₦${result.remainingTarget}`);
+                console.log(`⚠️ Partial payment! Paid: ₦${amountPaid}, Target: ₦${targetAmount}, Remaining target: ₦${result.remainingTarget}`);
             } else {
                 // ===== Mark payment as paid =====
                 const updatedPayment = await Payment.findOneAndUpdate(
