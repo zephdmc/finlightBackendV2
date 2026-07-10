@@ -608,9 +608,10 @@ router.post('/initialize', protect, paymentInitLimiter, validatePaymentInit, asy
             } else {
                 console.log('ℹ️ Keeping existing transactionReference:', payment.transactionReference);
             }
-
+            // ✅ Keep the FULL amount as expectedAmount
+            const fullAmount = calculateMemberPayAmount(targetOrgAmount);  // 209
             payment.paymentUrl = link;
-            payment.expectedAmount = memberPayAmount;
+            payment.expectedAmount = fullAmount;
             payment.targetOrgAmount = targetOrgAmount;
 
             if (isPartialPayment) {
