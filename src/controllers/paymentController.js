@@ -70,6 +70,19 @@ const handlePartialPayment = async (originalPayment, amountPaid, reference, note
 
     if (remainingTarget <= 0) {
         originalPayment.paidAt = new Date();
+        // ✅ If this is an outstanding payment, update the parent
+        if (originalPayment.parentPaymentId) {
+            const parentPayment = await Payment.findById(originalPayment.parentPaymentId);
+            if (parentPayment) {
+                parentPayment.totalPaidSoFar = parentPayment.targetOrgAmount;
+                parentPayment.remainingAmount = 0;
+                parentPayment.isPartial = false;
+                parentPayment.status = 'paid';
+                parentPayment.paidAt = new Date();
+                await parentPayment.save();
+                console.log(`✅ Parent payment ${parentPayment._id} marked as paid`);
+            }
+        }
     }
     await originalPayment.save();
 
@@ -95,6 +108,8 @@ const handlePartialPayment = async (originalPayment, amountPaid, reference, note
                 name: `${originalPayment.name} (Outstanding Balance)`,
                 type: 'outstanding',
                 amount: remainingTarget,
+                // ✅ Use targetOrgAmount from original payment
+                originalAmount: originalPayment.targetOrgAmount || originalPayment.amount,
                 targetOrgAmount: remainingTarget,
                 expectedAmount: remainingTarget,
                 remainingAmount: remainingTarget,

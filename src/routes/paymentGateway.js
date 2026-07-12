@@ -308,18 +308,155 @@ const calculateNetToOrganization = (amountPaid, targetOrgAmount = null) => {
  * Process a partial payment (card underpayment or bank transfer).
  * Fees are calculated on the actual amount paid.
  */
+// const processPartialPayment = async (originalPayment, amountPaid, reference, isManual = false) => {
+//     const targetOrgAmount = originalPayment.targetOrgAmount || originalPayment.amount;
+//     // ✅ Check if this exact payment was already processed
+//     const existingPartial = originalPayment.partialPayments?.find(
+//         p => p.transactionReference === reference && p.amount === amountPaid
+//     );
+
+//     if (existingPartial) {
+//         console.log(`⚠️ Duplicate partial payment detected for reference: ${reference}`);
+//         return {
+//             amountPaid,
+//             netToOrg: existingPartial.netToOrg,
+//             remainingTarget: originalPayment.remainingAmount,
+//             outstandingPayment: await originalPayment.getOutstandingRecord(),
+//             isDuplicate: true
+//         };
+//     }
+//     const totalPaidSoFar = (originalPayment.totalPaidSoFar || 0) + amountPaid;
+
+//     // Calculate what organization gets from THIS payment (after 2% + 2% fees)
+//     const fees = calculateNetToOrganization(amountPaid);
+//     const netToOrgFromThisPayment = fees.netToOrg;
+//     // ✅ Calculate remaining target based on what organization actually received
+//     const totalNetReceivedSoFar = (originalPayment.totalNetReceivedSoFar || 0) + netToOrgFromThisPayment;
+//     // ✅ Correct - Use net received, not gross paid
+//     const remainingOrgTarget = targetOrgAmount - totalNetReceivedSoFar;
+//     // Update original payment
+//     originalPayment.totalPaidSoFar = totalPaidSoFar;
+//     originalPayment.totalNetReceivedSoFar = totalNetReceivedSoFar;  // Track net received
+//     originalPayment.remainingAmount = remainingOrgTarget;
+//     originalPayment.isPartial = remainingOrgTarget > 0;
+//     originalPayment.partialPayments = originalPayment.partialPayments || [];
+//     originalPayment.partialPayments.push({
+//         amount: amountPaid,
+//         netToOrg: netToOrgFromThisPayment,
+//         date: new Date(),
+//         transactionReference: reference,
+//         fees: {
+//             flutterwaveFee: fees.flutterwaveFee,
+//             platformFee: fees.platformFee,
+//             totalFees: fees.totalFees
+//         }
+//     });
+
+//     if (remainingOrgTarget <= 0) {
+//         originalPayment.status = 'paid';
+//         originalPayment.completedAt = new Date();
+//     } else {
+//         originalPayment.status = 'partial';
+//     }
+
+//     await originalPayment.save();
+
+//     // Record INCOME for this partial payment
+//     await Income.create({
+//         amount: netToOrgFromThisPayment,
+//         source: `${originalPayment.type} payment (Partial - ₦${amountPaid.toLocaleString()} paid)`,
+//         date: new Date(),
+//         description: `Partial payment of ₦${amountPaid.toLocaleString()} received. Fees: ₦${fees.totalFees.toLocaleString()}. Organization target: ₦${targetOrgAmount.toLocaleString()}, Remaining: ₦${remainingOrgTarget.toLocaleString()}`,
+//         paymentId: originalPayment._id,
+//         paymentType: originalPayment.type,
+//         transactionReference: reference,
+//         organizationId: originalPayment.user?.organizationId,
+//         createdBy: originalPayment.user?._id,
+//         metadata: {
+//             isPartial: true,
+//             partialAmount: amountPaid,
+//             netToOrg: netToOrgFromThisPayment,
+//             remainingTarget: remainingOrgTarget,
+//             fees: { flutterwaveFee: fees.flutterwaveFee, platformFee: fees.platformFee }
+//         }
+//     });
+
+//     // Create or update outstanding payment record for remaining target amount
+//     let outstandingPayment = null;
+//     if (remainingOrgTarget > 0) {
+//         outstandingPayment = await Payment.findOne({
+//             parentPaymentId: originalPayment._id,
+//             type: 'outstanding',
+//             status: 'unpaid'
+//         });
+
+//         if (outstandingPayment) {
+//             outstandingPayment.amount = remainingOrgTarget;
+//             outstandingPayment.targetOrgAmount = remainingOrgTarget;
+//             outstandingPayment.description = `Outstanding balance of ₦${remainingOrgTarget.toLocaleString()} for ${originalPayment.name}`;
+//             await outstandingPayment.save();
+//         } else {
+//             outstandingPayment = await Payment.create({
+//                 name: `${originalPayment.name} (Outstanding Balance)`,
+//                 type: 'outstanding',
+//                 amount: remainingOrgTarget,
+//                 targetOrgAmount: remainingOrgTarget,
+//                 description: `Remaining balance of ₦${remainingOrgTarget.toLocaleString()} for ${originalPayment.name}. Original amount: ₦${targetOrgAmount.toLocaleString()}, Total paid so far: ₦${totalPaidSoFar.toLocaleString()}`,
+//                 user: originalPayment.user,
+//                 organizationId: originalPayment.organizationId,
+//                 paymentTypeId: originalPayment.paymentTypeId,
+//                 parentPaymentId: originalPayment._id,
+//                 status: 'unpaid',
+//                 isPartial: true,
+//                 dueDate: originalPayment.dueDate || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+//                 createdBy: originalPayment.user?._id
+//             });
+//         }
+//         console.log(`📝 Created outstanding record: ₦${remainingOrgTarget.toLocaleString()} for ${originalPayment.name}`);
+//     }
+
+//     console.log(`💰 Partial payment processed: Paid ₦${amountPaid.toLocaleString()} → Org net: ₦${netToOrgFromThisPayment.toLocaleString()}, Remaining target: ₦${remainingOrgTarget.toLocaleString()}`);
+
+//     return {
+//         amountPaid,
+//         netToOrg: netToOrgFromThisPayment,
+//         remainingTarget: remainingOrgTarget,
+//         outstandingPayment
+//     };
+// };
+
 const processPartialPayment = async (originalPayment, amountPaid, reference, isManual = false) => {
     const targetOrgAmount = originalPayment.targetOrgAmount || originalPayment.amount;
-    const totalPaidSoFar = (originalPayment.totalPaidSoFar || 0) + amountPaid;
+
+    // ✅ Check if this exact payment was already processed
+    const existingPartial = originalPayment.partialPayments?.find(
+        p => p.transactionReference === reference && p.amount === amountPaid
+    );
+
+    if (existingPartial) {
+        console.log(`⚠️ Duplicate partial payment detected for reference: ${reference}`);
+        return {
+            amountPaid,
+            netToOrg: existingPartial.netToOrg,
+            remainingTarget: originalPayment.remainingAmount,
+            outstandingPayment: await originalPayment.getOutstandingRecord(),
+            isDuplicate: true
+        };
+    }
 
     // Calculate what organization gets from THIS payment (after 2% + 2% fees)
     const fees = calculateNetToOrganization(amountPaid);
     const netToOrgFromThisPayment = fees.netToOrg;
 
-    const remainingOrgTarget = targetOrgAmount - totalPaidSoFar;
+    // ✅ Calculate total net received so far
+    const totalNetReceivedSoFar = (originalPayment.totalNetReceivedSoFar || 0) + netToOrgFromThisPayment;
+
+    // ✅ Calculate remaining based on NET received, NOT gross paid
+    const remainingOrgTarget = targetOrgAmount - totalNetReceivedSoFar;
 
     // Update original payment
-    originalPayment.totalPaidSoFar = totalPaidSoFar;
+    originalPayment.totalPaidSoFar = (originalPayment.totalPaidSoFar || 0) + amountPaid;
+    originalPayment.totalNetReceivedSoFar = totalNetReceivedSoFar;  // Track net received
     originalPayment.remainingAmount = remainingOrgTarget;
     originalPayment.isPartial = remainingOrgTarget > 0;
     originalPayment.partialPayments = originalPayment.partialPayments || [];
@@ -384,7 +521,7 @@ const processPartialPayment = async (originalPayment, amountPaid, reference, isM
                 type: 'outstanding',
                 amount: remainingOrgTarget,
                 targetOrgAmount: remainingOrgTarget,
-                description: `Remaining balance of ₦${remainingOrgTarget.toLocaleString()} for ${originalPayment.name}. Original amount: ₦${targetOrgAmount.toLocaleString()}, Total paid so far: ₦${totalPaidSoFar.toLocaleString()}`,
+                description: `Remaining balance of ₦${remainingOrgTarget.toLocaleString()} for ${originalPayment.name}. Original amount: ₦${targetOrgAmount.toLocaleString()}, Total paid so far: ₦${originalPayment.totalPaidSoFar.toLocaleString()}`,
                 user: originalPayment.user,
                 organizationId: originalPayment.organizationId,
                 paymentTypeId: originalPayment.paymentTypeId,

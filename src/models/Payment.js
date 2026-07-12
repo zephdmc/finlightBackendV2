@@ -55,6 +55,16 @@ const paymentSchema = new mongoose.Schema({
     default: 0,
     comment: 'Total amount paid so far (sum of all partial payments)'
   },
+  originalAmount: {
+    type: Number,
+    default: 0,
+    comment: 'Original amount from parent payment (for outstanding records)'
+  },
+  totalNetReceivedSoFar: {
+    type: Number,
+    default: 0,
+    comment: 'Total net amount organization has received from all payments'
+  },
   isPartial: {
     type: Boolean,
     default: false,
