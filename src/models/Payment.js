@@ -591,18 +591,7 @@ paymentSchema.statics.findOrCreatePeriodPayment = async function (data) {
 
   return payment;
 };
-// models/PaymentType.js - Add this method
-PaymentTypeSchema.methods.isDuesType = function () {
-  return this.type === 'dues' || this.type === 'monthly_dues';
-};
 
-PaymentTypeSchema.methods.shouldAutoGenerate = function () {
-  // Only generate for dues types that are mandatory and recurring
-  return this.isActive &&
-    this.is_mandatory &&
-    this.frequency !== 'one-time' &&
-    this.isDuesType();  // ← Only dues!
-};
 /**
  * NEW: Get all unpaid period payments for a user
  */
