@@ -14,9 +14,31 @@ const startServer = async () => {
   try {
     // Connect to database using your database config
     await database.connect();
+
     if (process.env.NODE_ENV !== 'test') {
+      // Load existing jobs
       require('./src/jobs/verifyPendingPayments');
+
+      // ============================================================
+      // NEW: Initialize recurring billing scheduler
+      // ============================================================
+      // Load the billing scheduler - this will start the cron job
+      // that automatically generates monthly/weekly dues for members
+      try {
+        const billingScheduler = require('./src/cron/billingScheduler');
+        // Start the scheduler with a 1-minute delay to ensure everything is loaded
+        setTimeout(() => {
+          billingScheduler.startBillingScheduler();
+          console.log('📆 Recurring billing scheduler initialized');
+        }, 1000);
+      } catch (err) {
+        console.warn('⚠️  Recurring billing scheduler not loaded yet:', err.message);
+        console.warn('   (This is expected if the billing service files are not yet created)');
+        // Don't exit - the server can still run without billing scheduler
+      }
+      // ============================================================
     }
+
     const requiredEnv = ['FLW_SECRET_KEY', 'FLW_PUBLIC_KEY', 'FLW_ENCRYPTION_KEY', 'FLW_WEBHOOK_SECRET', 'PLATFORM_SUBACCOUNT_ID'];
     const missing = requiredEnv.filter(key => !process.env[key]);
     if (missing.length) {
@@ -24,10 +46,6 @@ const startServer = async () => {
       process.exit(1);
     }
     console.log('✅ All Flutterwave environment variables are set');
-
-
-
-    
 
     const server = app.listen(PORT, '0.0.0.0', () => {
       console.log(`🚀 Server running on port ${PORT}`);
@@ -42,14 +60,23 @@ const startServer = async () => {
       console.log(`🔐 Database Connected: ${dbStatus.isConnected}`);
     });
 
-
-    
-
     // Handle shutdown signals gracefully
     const gracefulShutdown = async () => {
       console.log('\n🛑 Received shutdown signal');
 
       try {
+        // ============================================================
+        // NEW: Stop the billing scheduler on shutdown
+        // ============================================================
+        try {
+          const billingScheduler = require('./src/cron/billingScheduler');
+          billingScheduler.stopBillingScheduler();
+          console.log('📆 Recurring billing scheduler stopped');
+        } catch (err) {
+          // Ignore if scheduler not loaded
+        }
+        // ============================================================
+
         await database.disconnect();
         console.log('✅ Database connection closed');
 

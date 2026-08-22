@@ -75,6 +75,7 @@ const sendPaymentTypeNotifications = async (paymentType, organizationId, organiz
     return { total: 0, sent: 0, failed: 0, error: error.message };
   }
 };
+
 /**
  * @desc    Get all payment types (scoped to organization)
  * @route   GET /api/payment-types
@@ -427,6 +428,19 @@ exports.createPaymentType = async (req, res, next) => {
       });
     }
 
+    // ============================================================
+    // NEW: Validate recurring payment fields
+    // ============================================================
+    const { frequency, duration_value, duration_unit } = req.body;
+    if (frequency && frequency !== 'one-time') {
+      if (!duration_value || !duration_unit) {
+        return res.status(400).json({
+          success: false,
+          message: 'Duration value and unit are required for recurring payments'
+        });
+      }
+    }
+
     // Check if name already exists within the same organization
     const existing = await PaymentType.findOne({
       name: req.body.name,
@@ -485,7 +499,7 @@ exports.createPaymentType = async (req, res, next) => {
       }
     });
 
-    // ✅ Send response - NO smsPreview here!
+    // ✅ Send response
     res.status(201).json({
       success: true,
       data: {
@@ -529,6 +543,10 @@ exports.createBulkPaymentTypes = async (req, res, next) => {
 
 /**
  * @desc    Generate recurring payments from a payment type (scoped)
+ * @route   POST /api/payment-types/:id/generate
+ * @access  Private/Admin
+ * 
+ * UPDATED: Now uses the recurring billing service
  */
 exports.generateRecurringPayments = async (req, res, next) => {
   try {
@@ -545,40 +563,50 @@ exports.generateRecurringPayments = async (req, res, next) => {
       });
     }
 
-    // Get all members of this organization
-    const members = await User.find({ role: 'member', organizationId });
-    const generatedPayments = [];
-
-    for (const member of members) {
-      const existingPayment = await Payment.findOne({
-        user: member._id,
-        paymentTypeId: paymentType._id,
-        status: 'unpaid',
-        organizationId
+    // Check if it's a recurring type
+    if (paymentType.frequency === 'one-time') {
+      return res.status(400).json({
+        success: false,
+        message: 'This payment type is not recurring'
       });
-
-      if (!existingPayment && paymentType.frequency !== 'one-time') {
-        const payment = await Payment.create({
-          user: member._id,
-          name: paymentType.name,
-          type: paymentType.type,
-          amount: paymentType.amount,
-          description: paymentType.description,
-          paymentTypeId: paymentType._id,
-          organizationId,
-          status: 'unpaid',
-          dueDate: new Date()
-        });
-        generatedPayments.push(payment);
-      }
     }
+
+    // ============================================================
+    // UPDATED: Use the new recurring billing service
+    // ============================================================
+    const recurringBillingService = require('../services/recurringBillingService');
+
+    // Get the current period
+    const referenceDate = new Date();
+    const period = paymentType.getPeriodForDate(referenceDate);
+    const periodKey = paymentType.getPeriodKey(referenceDate);
+
+    // Generate payments for this specific type
+    // Note: We'll generate for all members in the organization
+    const results = await recurringBillingService.generateOrganizationPayments(
+      organizationId,
+      referenceDate
+    );
 
     res.status(200).json({
       success: true,
-      message: `Generated ${generatedPayments.length} payments`,
-      data: generatedPayments
+      data: {
+        paymentType: {
+          id: paymentType._id,
+          name: paymentType.name,
+          frequency: paymentType.frequency
+        },
+        period: {
+          periodKey,
+          periodStart: period.periodStart,
+          periodEnd: period.periodEnd
+        },
+        results
+      },
+      message: `Generated ${results.created} payments for ${paymentType.name}`
     });
   } catch (error) {
+    console.error('Generate recurring payments error:', error);
     next(error);
   }
 };
@@ -589,6 +617,19 @@ exports.generateRecurringPayments = async (req, res, next) => {
 exports.updatePaymentType = async (req, res, next) => {
   try {
     const organizationId = getOrgId(req);
+
+    // ============================================================
+    // NEW: Validate recurring payment fields on update
+    // ============================================================
+    const { frequency, duration_value, duration_unit } = req.body;
+    if (frequency && frequency !== 'one-time') {
+      if (!duration_value || !duration_unit) {
+        return res.status(400).json({
+          success: false,
+          message: 'Duration value and unit are required for recurring payments'
+        });
+      }
+    }
 
     // Check if name already exists (excluding current record)
     if (req.body.name) {
@@ -804,6 +845,273 @@ exports.exportPaymentTypes = async (req, res, next) => {
     res.setHeader('Content-Disposition', `attachment; filename=payment-types-${organizationId}-${Date.now()}.csv`);
     res.status(200).send(csvContent);
   } catch (error) {
+    next(error);
+  }
+};
+
+// ============================================================
+// NEW: RECURRING BILLING ENDPOINTS
+// ============================================================
+
+/**
+ * @desc    Get active recurring payment types (for billing scheduler)
+ * @route   GET /api/payment-types/recurring
+ * @access  Private/Admin
+ */
+exports.getRecurringTypes = async (req, res, next) => {
+  try {
+    const organizationId = getOrgId(req);
+    const { mandatory } = req.query;
+
+    let query = {
+      organizationId,
+      isActive: true,
+      frequency: { $in: ['weekly', 'monthly', 'quarterly', 'yearly'] },
+      type: { $in: ['dues', 'monthly_dues'] }  // ← Only dues!
+    };
+
+    if (mandatory === 'true') {
+      query.is_mandatory = true;
+    }
+
+    const types = await PaymentType.find(query).sort({ createdAt: -1 });
+
+    res.status(200).json({
+      success: true,
+      data: types,
+      count: types.length
+    });
+  } catch (error) {
+    console.error('Get recurring types error:', error);
+    next(error);
+  }
+};
+
+
+/**
+ * @desc    Get mandatory payment types that auto-generate
+ * @route   GET /api/payment-types/auto-generate
+ * @access  Private/Admin
+ */
+exports.getAutoGenerateTypes = async (req, res, next) => {
+  try {
+    const organizationId = getOrgId(req);
+
+    // Only get dues types that are mandatory and recurring
+    const types = await PaymentType.find({
+      organizationId,
+      isActive: true,
+      is_mandatory: true,
+      frequency: { $in: ['weekly', 'monthly', 'quarterly', 'yearly'] },
+      type: { $in: ['dues', 'monthly_dues'] }  // ← Only dues!
+    });
+
+    res.status(200).json({
+      success: true,
+      data: types,
+      count: types.length,
+      message: types.length === 0 ? 'No auto-generate dues types found' : undefined
+    });
+  } catch (error) {
+    console.error('Get auto-generate types error:', error);
+    next(error);
+  }
+};
+
+/**
+ * @desc    Calculate next due date for a payment type
+ * @route   GET /api/payment-types/:id/next-due
+ * @access  Private/Admin
+ */
+exports.calculateNextDueDate = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { fromDate } = req.query;
+    const organizationId = getOrgId(req);
+
+    const paymentType = await PaymentType.findOne({
+      _id: id,
+      organizationId
+    });
+
+    if (!paymentType) {
+      return res.status(404).json({
+        success: false,
+        message: 'Payment type not found'
+      });
+    }
+
+    const startDate = fromDate ? new Date(fromDate) : new Date();
+    const nextDueDate = paymentType.calculateNextDueDate(startDate);
+
+    // Also get period info
+    const period = paymentType.getPeriodForDate(startDate);
+    const periodKey = paymentType.getPeriodKey(startDate);
+
+    res.status(200).json({
+      success: true,
+      data: {
+        paymentType: {
+          id: paymentType._id,
+          name: paymentType.name,
+          frequency: paymentType.frequency,
+          duration_value: paymentType.duration_value,
+          duration_unit: paymentType.duration_unit
+        },
+        startDate,
+        nextDueDate,
+        currentPeriod: period,
+        currentPeriodKey: periodKey,
+        isRecurring: paymentType.isRecurring()
+      }
+    });
+  } catch (error) {
+    console.error('Calculate next due date error:', error);
+    next(error);
+  }
+};
+
+/**
+ * @desc    Get period info for a payment type
+ * @route   GET /api/payment-types/:id/period-info
+ * @access  Private/Admin
+ */
+exports.getPeriodInfo = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { date } = req.query;
+    const organizationId = getOrgId(req);
+
+    const paymentType = await PaymentType.findOne({
+      _id: id,
+      organizationId
+    });
+
+    if (!paymentType) {
+      return res.status(404).json({
+        success: false,
+        message: 'Payment type not found'
+      });
+    }
+
+    const referenceDate = date ? new Date(date) : new Date();
+    const period = paymentType.getPeriodForDate(referenceDate);
+    const periodKey = paymentType.getPeriodKey(referenceDate);
+
+    // Get all available periods (for dropdown/selection)
+    const availablePeriods = [];
+    if (paymentType.isRecurring()) {
+      // Generate last 12 months/periods
+      for (let i = 0; i < 12; i++) {
+        const d = new Date(referenceDate);
+        d.setMonth(d.getMonth() - i);
+        const p = paymentType.getPeriodForDate(d);
+        const key = paymentType.getPeriodKey(d);
+        availablePeriods.push({
+          periodKey: key,
+          periodStart: p.periodStart,
+          periodEnd: p.periodEnd,
+          periodLabel: p.periodLabel
+        });
+      }
+    }
+
+    res.status(200).json({
+      success: true,
+      data: {
+        paymentType: {
+          id: paymentType._id,
+          name: paymentType.name,
+          frequency: paymentType.frequency,
+          isRecurring: paymentType.isRecurring()
+        },
+        referenceDate,
+        currentPeriod: period,
+        currentPeriodKey: periodKey,
+        availablePeriods: availablePeriods.slice(0, 12),
+        scheduleText: paymentType.scheduleText
+      }
+    });
+  } catch (error) {
+    console.error('Get period info error:', error);
+    next(error);
+  }
+};
+
+/**
+ * @desc    Get payment type statistics (enhanced with recurring info)
+ * @route   GET /api/payment-types/stats
+ * @access  Private/Admin
+ * 
+ * UPDATED: Enhanced with recurring statistics
+ */
+exports.getPaymentTypeStats = async (req, res, next) => {
+  try {
+    const organizationId = getOrgId(req);
+
+    const [total, active, mandatory, recurring, autoGenerate] = await Promise.all([
+      PaymentType.countDocuments({ organizationId }),
+      PaymentType.countDocuments({ organizationId, isActive: true }),
+      PaymentType.countDocuments({ organizationId, is_mandatory: true }),
+      PaymentType.countDocuments({
+        organizationId,
+        isActive: true,
+        frequency: { $in: ['weekly', 'monthly', 'quarterly', 'yearly'] }
+      }),
+      PaymentType.countDocuments({
+        organizationId,
+        isActive: true,
+        is_mandatory: true,
+        frequency: { $in: ['weekly', 'monthly', 'quarterly', 'yearly'] }
+      })
+    ]);
+
+    // Group by frequency
+    const byFrequency = await PaymentType.aggregate([
+      { $match: { organizationId: new mongoose.Types.ObjectId(organizationId) } },
+      { $group: { _id: '$frequency', count: { $sum: 1 } } }
+    ]);
+
+    // Group by type
+    const byType = await PaymentType.aggregate([
+      { $match: { organizationId: new mongoose.Types.ObjectId(organizationId) } },
+      { $group: { _id: '$type', count: { $sum: 1 } } }
+    ]);
+
+    // Get total amount from all types
+    const amountStats = await PaymentType.aggregate([
+      { $match: { organizationId: new mongoose.Types.ObjectId(organizationId) } },
+      {
+        $group: {
+          _id: null,
+          totalAmount: { $sum: '$amount' },
+          avgAmount: { $avg: '$amount' },
+          minAmount: { $min: '$amount' },
+          maxAmount: { $max: '$amount' }
+        }
+      }
+    ]);
+
+    res.status(200).json({
+      success: true,
+      data: {
+        summary: {
+          total,
+          active,
+          inactive: total - active,
+          mandatory,
+          optional: total - mandatory,
+          recurring,
+          autoGenerate,
+          oneTime: total - recurring
+        },
+        byFrequency,
+        byType,
+        amountStats: amountStats[0] || {}
+      }
+    });
+  } catch (error) {
+    console.error('Get payment type stats error:', error);
     next(error);
   }
 };

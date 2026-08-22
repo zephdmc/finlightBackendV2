@@ -38,9 +38,40 @@ router.get('/mandatory', paymentTypeController.getMandatoryPaymentTypes);
 router.get('/optional', paymentTypeController.getOptionalPaymentTypes);
 
 router.get('/frequency/:frequency',
-  param('frequency').isIn(['one-time', 'monthly', 'quarterly', 'yearly']),
+  param('frequency').isIn(['one-time', 'weekly', 'monthly', 'quarterly', 'yearly']), // ← ADDED 'weekly'
   ValidationMiddleware.validate,
   paymentTypeController.getPaymentTypesByFrequency
+);
+
+// ============================================================
+// NEW: RECURRING BILLING ROUTES
+// These must come BEFORE the /:id routes to avoid conflicts
+// ============================================================
+
+// Get recurring payment types (for billing scheduler)
+router.get('/recurring',
+  roleCheck('admin'),
+  paymentTypeController.getRecurringTypes
+);
+
+// Get auto-generate types (mandatory + recurring)
+router.get('/auto-generate',
+  roleCheck('admin'),
+  paymentTypeController.getAutoGenerateTypes
+);
+
+// Calculate next due date for a payment type
+router.get('/:id/next-due',
+  roleCheck('admin'),
+  ValidationMiddleware.idParam,
+  paymentTypeController.calculateNextDueDate
+);
+
+// Get period info for a payment type
+router.get('/:id/period-info',
+  roleCheck('admin'),
+  ValidationMiddleware.idParam,
+  paymentTypeController.getPeriodInfo
 );
 
 // ==================== ADMIN STATISTICS ROUTES ====================
@@ -52,7 +83,7 @@ router.get('/export', roleCheck('admin'), paymentTypeController.exportPaymentTyp
 // ==================== SINGLE PAYMENT TYPE ROUTES ====================
 
 router.get('/:id', ValidationMiddleware.idParam, paymentTypeController.getPaymentType);
-router.get('/:id/payments', 
+router.get('/:id/payments',
   roleCheck('admin'),
   ValidationMiddleware.idParam,
   ValidationMiddleware.pagination,
@@ -71,7 +102,7 @@ router.get('/:id/report',
 
 // ==================== ADMIN WRITE ROUTES ====================
 
-// Create payment type - REMOVED sanitizeAll and preventNoSQLInjection
+// Create payment type
 router.post('/',
   roleCheck('admin'),
   adminWriteLimiter,
@@ -82,7 +113,7 @@ router.post('/',
     body('description').optional().trim().isLength({ max: 500 }),
     body('amount').isFloat({ min: 0.01, max: 10000000 }),
     body('is_mandatory').optional().isBoolean(),
-    body('frequency').optional().isIn(['one-time', 'monthly', 'quarterly', 'yearly']),
+    body('frequency').optional().isIn(['one-time', 'weekly', 'monthly', 'quarterly', 'yearly']), // ← ADDED 'weekly'
     body('duration_value').optional().isInt({ min: 1, max: 365 }),
     body('duration_unit').optional().isIn(['days', 'weeks', 'months', 'years'])
   ],
@@ -90,7 +121,7 @@ router.post('/',
   paymentTypeController.createPaymentType
 );
 
-// Bulk create - REMOVED sanitizeAll
+// Bulk create
 router.post('/bulk',
   roleCheck('admin'),
   bulkOperationLimiter,
@@ -99,7 +130,7 @@ router.post('/bulk',
     body('paymentTypes.*.name').notEmpty().trim().isLength({ min: 2, max: 100 }),
     body('paymentTypes.*.type').isIn(['dues', 'leavy', 'registration', 'monthly_dues', 'wedding_dues', 'charity_dues']),
     body('paymentTypes.*.amount').isFloat({ min: 0.01, max: 10000000 }),
-    body('paymentTypes.*.frequency').optional().isIn(['one-time', 'monthly', 'quarterly', 'yearly'])
+    body('paymentTypes.*.frequency').optional().isIn(['one-time', 'weekly', 'monthly', 'quarterly', 'yearly']) // ← ADDED 'weekly'
   ],
   ValidationMiddleware.validate,
   paymentTypeController.createBulkPaymentTypes
@@ -120,7 +151,7 @@ router.post('/:id/generate-payments',
   paymentTypeController.generateRecurringPayments
 );
 
-// Update payment type - REMOVED sanitizeAll
+// Update payment type
 router.put('/:id',
   roleCheck('admin'),
   adminWriteLimiter,
@@ -132,7 +163,12 @@ router.put('/:id',
     body('description').optional().trim().isLength({ max: 500 }),
     body('amount').optional().isFloat({ min: 0.01, max: 10000000 }),
     body('is_mandatory').optional().isBoolean(),
-    body('frequency').optional().isIn(['one-time', 'monthly', 'quarterly', 'yearly']),
+    // ============================================================
+    // FIX: Added 'weekly' and proper validation for recurring fields
+    // ============================================================
+    body('frequency').optional().isIn(['one-time', 'weekly', 'monthly', 'quarterly', 'yearly']),
+    body('duration_value').optional().isInt({ min: 1, max: 365 }),
+    body('duration_unit').optional().isIn(['days', 'weeks', 'months', 'years']),
     body('isActive').optional().isBoolean()
   ],
   ValidationMiddleware.validate,

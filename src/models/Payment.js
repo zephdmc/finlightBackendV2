@@ -27,6 +27,24 @@ const paymentSchema = new mongoose.Schema({
     comment: 'What organization should receive (target amount)'
   },
 
+  // ==================== BILLING PERIOD FIELDS (NEW) ====================
+  periodStart: {
+    type: Date,
+    default: null,
+    comment: 'Start of the billing period (e.g., 2026-08-01 for August)'
+  },
+  periodEnd: {
+    type: Date,
+    default: null,
+    comment: 'End of the billing period (e.g., 2026-08-31 for August)'
+  },
+  periodKey: {
+    type: String,
+    default: null,
+    index: true,
+    comment: 'Human-readable period key (e.g., "2026-08", "2026-W34", "2026-Q3")'
+  },
+
   transactionReference: {
     type: String,
     // required: true,
@@ -194,6 +212,82 @@ const paymentSchema = new mongoose.Schema({
   }
 });
 
+// ==================== INDEXES ====================
+
+// PRIMARY: Multi-tenant index for all queries
+paymentSchema.index({ organizationId: 1, createdAt: -1 });
+
+// User-specific queries
+paymentSchema.index({ organizationId: 1, user: 1, status: 1 });
+paymentSchema.index({ organizationId: 1, user: 1, status: 1, remainingAmount: 1 });
+
+// Payment type queries
+paymentSchema.index({ organizationId: 1, paymentTypeId: 1 });
+
+// Period-based queries (NEW - very important)
+paymentSchema.index({ organizationId: 1, periodKey: 1, status: 1 });
+paymentSchema.index({ organizationId: 1, user: 1, periodKey: 1 });
+paymentSchema.index({ organizationId: 1, paymentTypeId: 1, periodKey: 1 });
+
+// Due date queries
+paymentSchema.index({ organizationId: 1, status: 1, dueDate: 1 });
+
+// Parent payment for partials
+paymentSchema.index({ organizationId: 1, parentPaymentId: 1 });
+
+// Fee tracking
+paymentSchema.index({ organizationId: 1, isPartial: 1, status: 1 });
+paymentSchema.index({ organizationId: 1, flutterwaveFeeDeducted: 1 });
+paymentSchema.index({ organizationId: 1, platformFeeDeducted: 1 });
+paymentSchema.index({ organizationId: 1, netToOrganization: 1 });
+
+// ==================== UNIQUE COMPOUND INDEX (CRITICAL FOR RECURRING) ====================
+// Prevents duplicate billing period payments
+// One member can only have ONE payment per payment type per period
+paymentSchema.index(
+  {
+    organizationId: 1,
+    user: 1,
+    paymentTypeId: 1,
+    periodKey: 1
+  },
+  {
+    unique: true,
+    partialFilterExpression: {
+      periodKey: { $exists: true, $ne: null },
+      paymentTypeId: { $exists: true, $ne: null }
+    },
+    name: 'unique_period_payment'
+  }
+);
+
+// Alternative unique index using periodStart (more strict)
+paymentSchema.index(
+  {
+    organizationId: 1,
+    user: 1,
+    paymentTypeId: 1,
+    periodStart: 1
+  },
+  {
+    unique: true,
+    partialFilterExpression: {
+      periodStart: { $exists: true, $ne: null },
+      paymentTypeId: { $exists: true, $ne: null }
+    },
+    name: 'unique_period_start_payment'
+  }
+);
+
+// Keep TTL index for auto-deleting pending payments
+paymentSchema.index(
+  { createdAt: 1 },
+  {
+    expireAfterSeconds: 86400,
+    partialFilterExpression: { status: 'pending' }
+  }
+);
+
 // ==================== PRE-SAVE HOOKS ====================
 
 paymentSchema.pre('save', function (next) {
@@ -214,6 +308,11 @@ paymentSchema.pre('save', function (next) {
 
   if (this.totalPaidSoFar > 0 && this.remainingAmount > 0 && this.status !== 'partial') {
     this.status = 'partial';
+  }
+
+  // Auto-generate periodKey if periodStart is set but periodKey isn't
+  if (this.periodStart && !this.periodKey) {
+    this.periodKey = this.generatePeriodKey();
   }
 
   next();
@@ -238,8 +337,78 @@ paymentSchema.virtual('totalFeesPaid').get(function () {
   return (this.flutterwaveFeeDeducted || 0) + (this.platformFeeDeducted || 0);
 });
 
+// NEW: Virtual for period display
+paymentSchema.virtual('periodDisplay').get(function () {
+  if (!this.periodStart) return 'One-time';
+  if (this.periodKey) return this.periodKey;
+
+  const start = this.periodStart;
+  const end = this.periodEnd;
+
+  if (!end) {
+    return start.toLocaleDateString('default', { month: 'long', year: 'numeric' });
+  }
+
+  const startStr = start.toLocaleDateString('default', { month: 'short', day: 'numeric' });
+  const endStr = end.toLocaleDateString('default', { month: 'short', day: 'numeric', year: 'numeric' });
+  return `${startStr} - ${endStr}`;
+});
+
+// NEW: Virtual for period summary (e.g., "August 2026")
+paymentSchema.virtual('periodSummary').get(function () {
+  if (!this.periodStart) return 'One-time';
+  return this.periodStart.toLocaleDateString('default', {
+    month: 'long',
+    year: 'numeric'
+  });
+});
+
+// NEW: Virtual to check if this is a recurring period payment
+paymentSchema.virtual('isPeriodPayment').get(function () {
+  return this.periodStart !== null && this.periodStart !== undefined;
+});
+
 // ==================== INSTANCE METHODS ====================
 
+/**
+ * Generate a period key from periodStart and frequency
+ * Examples: "2026-08", "2026-W34", "2026-Q3"
+ */
+paymentSchema.methods.generatePeriodKey = function () {
+  if (!this.periodStart) return null;
+
+  const date = new Date(this.periodStart);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+
+  // Try to determine frequency from payment type
+  // If we can't determine, use month as default
+  return `${year}-${month}`;
+};
+
+/**
+ * Check if this payment belongs to a specific period
+ */
+paymentSchema.methods.belongsToPeriod = function (periodKey) {
+  if (!this.periodKey) return false;
+  return this.periodKey === periodKey;
+};
+
+/**
+ * Check if this payment is for the current period
+ */
+paymentSchema.methods.isCurrentPeriod = function () {
+  if (!this.periodStart) return false;
+
+  const now = new Date();
+  const currentPeriodStart = new Date(now.getFullYear(), now.getMonth(), 1);
+
+  return this.periodStart >= currentPeriodStart;
+};
+
+/**
+ * Add partial payment (existing method - keep as is)
+ */
 paymentSchema.methods.addPartialPayment = function (partialData) {
   this.partialPayments = this.partialPayments || [];
   this.partialPayments.push({
@@ -269,6 +438,9 @@ paymentSchema.methods.addPartialPayment = function (partialData) {
   return this.save();
 };
 
+/**
+ * Get outstanding record (existing method - keep as is)
+ */
 paymentSchema.methods.getOutstandingRecord = async function () {
   return await mongoose.model('Payment').findOne({
     parentPaymentId: this._id,
@@ -277,31 +449,62 @@ paymentSchema.methods.getOutstandingRecord = async function () {
   });
 };
 
+/**
+ * Check if payment is payable (existing method - keep as is)
+ */
 paymentSchema.methods.isPayable = function () {
   return this.status !== 'paid' && (this.remainingAmount > 0);
 };
 
 // ==================== STATIC METHODS ====================
 
-paymentSchema.statics.findOutstandingByUser = function (userId, organizationId) {
-  return this.find({
+/**
+ * Find outstanding payments by user (updated to support period filtering)
+ */
+paymentSchema.statics.findOutstandingByUser = function (userId, organizationId, options = {}) {
+  const query = {
     user: userId,
     organizationId: organizationId,
     status: { $in: ['unpaid', 'partial'] },
     remainingAmount: { $gt: 0 }
-  }).sort({ dueDate: 1, createdAt: 1 });
+  };
+
+  // Optional: filter by period
+  if (options.periodKey) {
+    query.periodKey = options.periodKey;
+  }
+
+  // Optional: filter by date range
+  if (options.fromDate) {
+    query.periodStart = { $gte: options.fromDate };
+  }
+  if (options.toDate) {
+    query.periodEnd = { $lte: options.toDate };
+  }
+
+  return this.find(query)
+    .populate('paymentTypeId', 'name type frequency')
+    .sort({ periodStart: 1, dueDate: 1, createdAt: 1 });
 };
 
-paymentSchema.statics.getTotalOutstandingByUser = async function (userId, organizationId) {
+/**
+ * Get total outstanding by user (updated with period support)
+ */
+paymentSchema.statics.getTotalOutstandingByUser = async function (userId, organizationId, options = {}) {
+  const match = {
+    user: mongoose.Types.ObjectId(userId),
+    organizationId: mongoose.Types.ObjectId(organizationId),
+    status: { $in: ['unpaid', 'partial'] },
+    remainingAmount: { $gt: 0 }
+  };
+
+  // Optional period filter
+  if (options.periodKey) {
+    match.periodKey = options.periodKey;
+  }
+
   const result = await this.aggregate([
-    {
-      $match: {
-        user: mongoose.Types.ObjectId(userId),
-        organizationId: mongoose.Types.ObjectId(organizationId),
-        status: { $in: ['unpaid', 'partial'] },
-        remainingAmount: { $gt: 0 }
-      }
-    },
+    { $match: match },
     {
       $group: {
         _id: null,
@@ -313,6 +516,9 @@ paymentSchema.statics.getTotalOutstandingByUser = async function (userId, organi
   return result.length > 0 ? result[0].total : 0;
 };
 
+/**
+ * Find partial payments by user (existing - keep as is)
+ */
 paymentSchema.statics.findPartialPaymentsByUser = function (userId, organizationId) {
   return this.find({
     user: userId,
@@ -322,27 +528,133 @@ paymentSchema.statics.findPartialPaymentsByUser = function (userId, organization
   }).populate('paymentTypeId', 'name type').sort({ createdAt: -1 });
 };
 
-// ==================== INDEXES ====================
+/**
+ * NEW: Find payments for a specific period and payment type
+ * Used by the billing scheduler to check if a payment already exists
+ */
+paymentSchema.statics.findPeriodPayment = function (organizationId, userId, paymentTypeId, periodKey) {
+  return this.findOne({
+    organizationId,
+    user: userId,
+    paymentTypeId,
+    periodKey,
+    status: { $in: ['unpaid', 'partial', 'paid'] }
+  });
+};
 
-paymentSchema.index({ organizationId: 1, createdAt: -1 });
-paymentSchema.index({ organizationId: 1, user: 1, status: 1 });
-paymentSchema.index({ organizationId: 1, paymentTypeId: 1 });
-paymentSchema.index({ organizationId: 1, status: 1, dueDate: 1 });
-paymentSchema.index({ organizationId: 1, parentPaymentId: 1 });
-paymentSchema.index({ organizationId: 1, user: 1, status: 1, remainingAmount: 1 });
-paymentSchema.index({ organizationId: 1, isPartial: 1, status: 1 });
-paymentSchema.index({ organizationId: 1, flutterwaveFeeDeducted: 1 });
-paymentSchema.index({ organizationId: 1, platformFeeDeducted: 1 });
-paymentSchema.index({ organizationId: 1, netToOrganization: 1 });
-paymentSchema.index({ user: 1, organizationId: 1, status: 1, remainingAmount: 1 });
+/**
+ * NEW: Find or create a period payment (upsert pattern)
+ * Used by the billing scheduler
+ */
+paymentSchema.statics.findOrCreatePeriodPayment = async function (data) {
+  const {
+    organizationId,
+    user,
+    paymentTypeId,
+    periodStart,
+    periodEnd,
+    periodKey,
+    name,
+    type,
+    amount,
+    isMandatory
+  } = data;
 
-// Keep TTL index for auto-deleting pending payments
-paymentSchema.index(
-  { createdAt: 1 },
-  {
-    expireAfterSeconds: 86400,
-    partialFilterExpression: { status: 'pending' }
+  // Try to find existing payment
+  let payment = await this.findOne({
+    organizationId,
+    user,
+    paymentTypeId,
+    periodKey
+  });
+
+  // If not found, create it
+  if (!payment) {
+    payment = new this({
+      organizationId,
+      user,
+      paymentTypeId,
+      periodStart,
+      periodEnd,
+      periodKey,
+      name,
+      type,
+      amount,
+      targetOrgAmount: amount,
+      expectedAmount: amount,
+      remainingAmount: amount,
+      status: 'unpaid',
+      dueDate: periodEnd || new Date()
+    });
+    await payment.save();
   }
-);
+
+  return payment;
+};
+// models/PaymentType.js - Add this method
+PaymentTypeSchema.methods.isDuesType = function () {
+  return this.type === 'dues' || this.type === 'monthly_dues';
+};
+
+PaymentTypeSchema.methods.shouldAutoGenerate = function () {
+  // Only generate for dues types that are mandatory and recurring
+  return this.isActive &&
+    this.is_mandatory &&
+    this.frequency !== 'one-time' &&
+    this.isDuesType();  // ← Only dues!
+};
+/**
+ * NEW: Get all unpaid period payments for a user
+ */
+paymentSchema.statics.getUnpaidPeriodPayments = function (userId, organizationId) {
+  return this.find({
+    user: userId,
+    organizationId,
+    status: 'unpaid',
+    periodKey: { $ne: null, $exists: true }
+  })
+    .populate('paymentTypeId', 'name type frequency amount')
+    .sort({ periodStart: 1 });
+};
+
+/**
+ * NEW: Get payment history with period grouping
+ */
+paymentSchema.statics.getPaymentHistoryByPeriod = function (userId, organizationId) {
+  return this.aggregate([
+    {
+      $match: {
+        user: mongoose.Types.ObjectId(userId),
+        organizationId: mongoose.Types.ObjectId(organizationId),
+        periodKey: { $ne: null, $exists: true }
+      }
+    },
+    {
+      $group: {
+        _id: {
+          periodKey: '$periodKey',
+          paymentTypeId: '$paymentTypeId'
+        },
+        payments: { $push: '$$ROOT' },
+        totalAmount: { $sum: '$amount' },
+        totalPaid: { $sum: '$totalPaidSoFar' },
+        count: { $sum: 1 }
+      }
+    },
+    { $sort: { '_id.periodKey': -1 } }
+  ]);
+};
+
+// ==================== POST HOOKS ====================
+
+paymentSchema.post('save', function (doc) {
+  if (doc.status === 'paid' && doc.paidAt) {
+    console.log(`Payment ${doc._id} marked as paid at ${doc.paidAt}`);
+  }
+});
+
+paymentSchema.post('remove', function (doc) {
+  console.log(`Payment ${doc._id} removed for user ${doc.user}`);
+});
 
 module.exports = mongoose.model('Payment', paymentSchema);

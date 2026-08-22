@@ -1,4 +1,3 @@
-
 // backend/src/controllers/paymentController.js
 const Payment = require('../models/Payment');
 const User = require('../models/User');
@@ -27,6 +26,28 @@ const calculateFeesAndNet = (amountPaid) => {
         totalFees: Math.round(totalFees),
         netToOrg: Math.round(netToOrg)
     };
+};
+
+/**
+ * Get the current period key for a payment type
+ * NEW: Helper for recurring billing
+ */
+const getCurrentPeriodKey = (paymentType, referenceDate = new Date()) => {
+    if (!paymentType || paymentType.frequency === 'one-time') {
+        return null;
+    }
+    return paymentType.getPeriodKey(referenceDate);
+};
+
+/**
+ * Get the current period dates for a payment type
+ * NEW: Helper for recurring billing
+ */
+const getCurrentPeriodDates = (paymentType, referenceDate = new Date()) => {
+    if (!paymentType || paymentType.frequency === 'one-time') {
+        return { periodStart: null, periodEnd: null };
+    }
+    return paymentType.getPeriodForDate(referenceDate);
 };
 
 /**
@@ -120,7 +141,11 @@ const handlePartialPayment = async (originalPayment, amountPaid, reference, note
                 organizationId: originalPayment.organizationId,
                 description: `Remaining balance of ₦${remainingTarget.toLocaleString()} for ${originalPayment.name}`,
                 status: 'unpaid',
-                dueDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
+                dueDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+                // Copy period info from original
+                periodStart: originalPayment.periodStart,
+                periodEnd: originalPayment.periodEnd,
+                periodKey: originalPayment.periodKey
             });
         }
         console.log(`Outstanding payment record: ${outstandingPayment._id} for amount ${remainingTarget}`);
@@ -274,20 +299,43 @@ exports.getOutstandingPayments = async (req, res, next) => {
     try {
         const userId = req.user.id;
         const organizationId = req.user.organizationId;
+        const { periodKey } = req.query; // NEW: optional period filter
 
-        const outstandingPayments = await Payment.find({
+        const query = {
             user: userId,
             organizationId,
             status: { $in: ['unpaid', 'partial'] },
             remainingAmount: { $gt: 0 }
-        }).populate('paymentTypeId', 'name description');
+        };
+
+        // NEW: Filter by specific period if provided
+        if (periodKey) {
+            query.periodKey = periodKey;
+        }
+
+        const outstandingPayments = await Payment.find(query)
+            .populate('paymentTypeId', 'name description frequency')
+            .sort({ periodStart: -1, dueDate: 1, createdAt: 1 });
 
         const totalOutstanding = outstandingPayments.reduce((sum, p) => sum + (p.remainingAmount || p.amount), 0);
+
+        // NEW: Group by period for better display
+        const groupedByPeriod = outstandingPayments.reduce((acc, p) => {
+            const key = p.periodKey || 'one-time';
+            if (!acc[key]) acc[key] = [];
+            acc[key].push(p);
+            return acc;
+        }, {});
 
         res.status(200).json({
             success: true,
             data: outstandingPayments,
-            summary: { totalOutstanding, count: outstandingPayments.length }
+            grouped: groupedByPeriod,
+            summary: {
+                totalOutstanding,
+                count: outstandingPayments.length,
+                periods: Object.keys(groupedByPeriod)
+            }
         });
     } catch (error) {
         console.error('Get outstanding payments error:', error);
@@ -355,10 +403,10 @@ exports.markFineAsPaid = async (req, res, next) => {
 exports.createPayment = async (req, res, next) => {
     console.log('🔥🔥🔥 Admin createPayment WAS CALLED! 🔥🔥🔥');
     try {
-        const { userId, name, type, amount, dueDate, description, paymentTypeId } = req.body;
+        const { userId, name, type, amount, dueDate, description, paymentTypeId, periodStart, periodEnd, periodKey } = req.body;
         const organizationId = req.user.organizationId;
 
-        console.log('Create payment request:', { userId, name, type, amount, dueDate, description, paymentTypeId, organizationId });
+        console.log('Create payment request:', { userId, name, type, amount, dueDate, description, paymentTypeId, organizationId, periodStart, periodEnd, periodKey });
 
         if (!userId || !name || !type || !amount || amount <= 0) {
             return res.status(400).json({ success: false, message: 'Missing required fields' });
@@ -368,6 +416,25 @@ exports.createPayment = async (req, res, next) => {
         if (!targetUser) {
             return res.status(403).json({ success: false, message: 'User not found in your organization' });
         }
+
+        // NEW: If paymentTypeId is provided, try to auto-fill period info
+        let periodData = {};
+        if (paymentTypeId) {
+            const paymentType = await PaymentType.findById(paymentTypeId);
+            if (paymentType && paymentType.isRecurring()) {
+                const period = paymentType.getPeriodForDate(new Date());
+                periodData = {
+                    periodStart: period.periodStart,
+                    periodEnd: period.periodEnd,
+                    periodKey: paymentType.getPeriodKey(new Date())
+                };
+            }
+        }
+
+        // Use provided period data or auto-generated
+        const finalPeriodStart = periodStart || periodData.periodStart || null;
+        const finalPeriodEnd = periodEnd || periodData.periodEnd || null;
+        const finalPeriodKey = periodKey || periodData.periodKey || null;
 
         const payment = await Payment.create({
             user: userId,
@@ -383,10 +450,18 @@ exports.createPayment = async (req, res, next) => {
             description: description || '',
             paymentTypeId: paymentTypeId || null,
             organizationId,
-            status: 'unpaid'
+            status: 'unpaid',
+            // NEW: Period fields
+            periodStart: finalPeriodStart,
+            periodEnd: finalPeriodEnd,
+            periodKey: finalPeriodKey
         });
 
-        res.status(201).json({ success: true, data: payment, message: 'Payment created successfully' });
+        res.status(201).json({
+            success: true,
+            data: payment,
+            message: 'Payment created successfully'
+        });
     } catch (error) {
         console.error('Error in createPayment:', error);
         next(error);
@@ -461,7 +536,7 @@ exports.getPaymentById = async (req, res, next) => {
             organizationId: req.user.organizationId
         })
             .populate('user', 'name email')
-            .populate('paymentTypeId', 'name description');
+            .populate('paymentTypeId', 'name description frequency');
 
         if (!payment) {
             return res.status(404).json({ success: false, message: 'Payment not found' });
@@ -515,7 +590,8 @@ exports.getPublicIncome = async (req, res, next) => {
                 memberName: payment.user?.name || 'Member',
                 paymentType: source,
                 isPartial: payment.isPartial,
-                remainingAmount: payment.remainingAmount
+                remainingAmount: payment.remainingAmount,
+                periodKey: payment.periodKey // NEW: include period info
             };
         });
 
@@ -539,15 +615,16 @@ exports.getPublicIncome = async (req, res, next) => {
 exports.getPaymentSummary = async (req, res, next) => {
     try {
         const organizationId = req.user.organizationId;
-        const { startDate, endDate, type } = req.query;
+        const { startDate, endDate, type, periodKey } = req.query;
 
         let matchCondition = { organizationId };
         if (startDate && endDate) {
             matchCondition.createdAt = { $gte: new Date(startDate), $lte: new Date(endDate) };
         }
         if (type) matchCondition.type = type;
+        if (periodKey) matchCondition.periodKey = periodKey; // NEW: filter by period
 
-        const [summary, byType, byStatus] = await Promise.all([
+        const [summary, byType, byStatus, byPeriod] = await Promise.all([
             Payment.aggregate([
                 { $match: matchCondition },
                 {
@@ -569,6 +646,12 @@ exports.getPaymentSummary = async (req, res, next) => {
             Payment.aggregate([
                 { $match: matchCondition },
                 { $group: { _id: '$status', total: { $sum: '$amount' }, count: { $sum: 1 } } }
+            ]),
+            // NEW: Group by period
+            Payment.aggregate([
+                { $match: { ...matchCondition, periodKey: { $ne: null } } },
+                { $group: { _id: '$periodKey', total: { $sum: '$amount' }, count: { $sum: 1 } } },
+                { $sort: { '_id': -1 } }
             ])
         ]);
 
@@ -577,7 +660,8 @@ exports.getPaymentSummary = async (req, res, next) => {
             data: {
                 summary: summary[0] || { totalAmount: 0, totalPaid: 0, totalUnpaid: 0, count: 0, paidCount: 0, unpaidCount: 0 },
                 byType,
-                byStatus
+                byStatus,
+                byPeriod // NEW: period breakdown
             }
         });
     } catch (error) {
@@ -590,15 +674,54 @@ exports.getPaymentSummary = async (req, res, next) => {
 // @access  Private
 exports.getUserPayments = async (req, res, next) => {
     try {
-        const payments = await Payment.find({
-            user: req.user.id,
-            organizationId: req.user.organizationId
-        })
-            .populate('user', 'name email')
-            .populate('paymentTypeId', 'name description')
-            .sort({ createdAt: -1 });
+        const userId = req.user.id;
+        const organizationId = req.user.organizationId;
+        const { periodKey, status, limit = 50 } = req.query;
 
-        res.status(200).json({ success: true, data: payments });
+        const query = {
+            user: userId,
+            organizationId
+        };
+
+        // NEW: Filter by period
+        if (periodKey) {
+            query.periodKey = periodKey;
+        }
+
+        // Filter by status
+        if (status) {
+            query.status = status;
+        }
+
+        const payments = await Payment.find(query)
+            .populate('user', 'name email')
+            .populate('paymentTypeId', 'name description frequency')
+            .sort({ periodStart: -1, createdAt: -1 })
+            .limit(parseInt(limit));
+
+        // NEW: Group by period for better UI
+        const groupedByPeriod = payments.reduce((acc, p) => {
+            const key = p.periodKey || 'one-time';
+            if (!acc[key]) acc[key] = [];
+            acc[key].push(p);
+            return acc;
+        }, {});
+
+        // Calculate summary
+        const totalUnpaid = payments
+            .filter(p => p.status === 'unpaid' || p.status === 'partial')
+            .reduce((sum, p) => sum + (p.remainingAmount || 0), 0);
+
+        res.status(200).json({
+            success: true,
+            data: payments,
+            grouped: groupedByPeriod,
+            summary: {
+                total: payments.length,
+                totalUnpaid,
+                periods: Object.keys(groupedByPeriod)
+            }
+        });
     } catch (error) {
         next(error);
     }
@@ -621,11 +744,12 @@ exports.getAllPayments = async (req, res, next) => {
             query.organizationId = organizationId;
         }
 
-        const { status, type, userId, startDate, endDate, page = 1, limit = 20 } = req.query;
+        const { status, type, userId, startDate, endDate, periodKey, page = 1, limit = 20 } = req.query;
 
         if (status) query.status = status;
         if (type) query.type = type;
         if (userId) query.user = userId;
+        if (periodKey) query.periodKey = periodKey; // NEW
         if (startDate && endDate) {
             query.createdAt = { $gte: new Date(startDate), $lte: new Date(endDate) };
         }
@@ -636,7 +760,7 @@ exports.getAllPayments = async (req, res, next) => {
             Payment.find(query)
                 .populate('user', 'name email')
                 .populate('paymentTypeId', 'name description')
-                .sort({ createdAt: -1 })
+                .sort({ periodStart: -1, createdAt: -1 })
                 .skip(skip)
                 .limit(parseInt(limit)),
             Payment.countDocuments(query)
@@ -693,7 +817,7 @@ exports.getPayment = async (req, res, next) => {
             organizationId: req.user.organizationId
         })
             .populate('user', 'name email phone')
-            .populate('paymentTypeId', 'name description amount')
+            .populate('paymentTypeId', 'name description amount frequency')
             .populate('parentPaymentId');
 
         if (!payment) {
@@ -715,7 +839,7 @@ exports.getPayment = async (req, res, next) => {
 // @access  Private/Admin
 exports.updatePayment = async (req, res, next) => {
     try {
-        const { amount, dueDate, description, status, paidAt } = req.body;
+        const { amount, dueDate, description, status, paidAt, periodStart, periodEnd, periodKey } = req.body;
         const organizationId = req.user.organizationId;
 
         const payment = await Payment.findOne({ _id: req.params.id, organizationId });
@@ -734,6 +858,10 @@ exports.updatePayment = async (req, res, next) => {
         }
         if (dueDate) payment.dueDate = dueDate;
         if (description) payment.description = description;
+        // NEW: Period fields
+        if (periodStart) payment.periodStart = periodStart;
+        if (periodEnd) payment.periodEnd = periodEnd;
+        if (periodKey) payment.periodKey = periodKey;
 
         await payment.save();
 
@@ -774,39 +902,243 @@ exports.deletePayment = async (req, res, next) => {
     }
 };
 
-// @desc    Get pending payments for a member (based on payment types in the same organisation)
+// ============================================================
+// UPDATED: Get pending payments for a member (period-aware)
 // @route   GET /api/payments/pending
 // @access  Private
+// ============================================================
 exports.getPendingPayments = async (req, res, next) => {
     try {
         const userId = req.user.id;
         const organizationId = req.user.organizationId;
+        const { periodKey } = req.query; // Optional period filter
 
+        // Get all active payment types
         const paymentTypes = await PaymentType.find({ isActive: true, organizationId });
-        const existingPayments = await Payment.find({
+
+        // Get the current period key for each payment type
+        // NEW: Determine which period we're checking
+        const referenceDate = new Date();
+
+        // Get all payments the user has already paid (for current periods)
+        // Instead of checking "ever paid", check "paid for current period"
+        const currentPeriodKeys = paymentTypes
+            .filter(pt => pt.isRecurring())
+            .map(pt => pt.getPeriodKey(referenceDate))
+            .filter(Boolean);
+
+        // Get paid payments for current periods
+        const paidPayments = await Payment.find({
             user: userId,
             organizationId,
-            status: 'paid'
+            status: 'paid',
+            periodKey: { $in: currentPeriodKeys }
         });
 
-        const paidTypeIds = existingPayments.map(p => p.paymentTypeId?.toString()).filter(Boolean);
-        const pendingPaymentTypes = paymentTypes.filter(type => !paidTypeIds.includes(type._id.toString()));
+        const paidTypeIds = paidPayments.map(p => p.paymentTypeId?.toString()).filter(Boolean);
 
-        const pendingPayments = pendingPaymentTypes.map(type => ({
-            _id: type._id,
-            name: type.name,
-            description: type.description,
-            amount: type.amount,
-            type: type.type,
-            isMandatory: type.isMandatory,
-            status: 'pending'
-        }));
+        // Also get payments that are unpaid (already exists)
+        const unpaidPayments = await Payment.find({
+            user: userId,
+            organizationId,
+            status: { $in: ['unpaid', 'partial', 'pending'] },
+            remainingAmount: { $gt: 0 }
+        });
+
+        const unpaidTypeIds = unpaidPayments.map(p => p.paymentTypeId?.toString()).filter(Boolean);
+
+        // Determine pending payment types
+        const pendingPaymentTypes = paymentTypes.filter(type => {
+            const typeId = type._id.toString();
+
+            // If it's recurring, check if paid for current period
+            if (type.isRecurring()) {
+                const currentKey = type.getPeriodKey(referenceDate);
+                // Already paid for this period
+                if (paidPayments.some(p =>
+                    p.paymentTypeId?.toString() === typeId &&
+                    p.periodKey === currentKey
+                )) {
+                    return false;
+                }
+                // Already has an unpaid record for this period
+                if (unpaidPayments.some(p =>
+                    p.paymentTypeId?.toString() === typeId &&
+                    p.periodKey === currentKey
+                )) {
+                    return false;
+                }
+                return true;
+            }
+
+            // For one-time payments: check if ever paid
+            return !paidTypeIds.includes(typeId) && !unpaidTypeIds.includes(typeId);
+        });
+
+        // Build response with period info
+        const pendingPayments = pendingPaymentTypes.map(type => {
+            const periodInfo = type.isRecurring()
+                ? type.getPeriodForDate(referenceDate)
+                : { periodStart: null, periodEnd: null, periodLabel: 'One-time' };
+
+            return {
+                _id: type._id,
+                name: type.name,
+                description: type.description,
+                amount: type.amount,
+                type: type.type,
+                isMandatory: type.is_mandatory,
+                isRecurring: type.isRecurring(),
+                frequency: type.frequency,
+                status: 'pending',
+                periodStart: periodInfo.periodStart,
+                periodEnd: periodInfo.periodEnd,
+                periodLabel: periodInfo.periodLabel,
+                periodKey: type.isRecurring() ? type.getPeriodKey(referenceDate) : null
+            };
+        });
 
         res.status(200).json({
             success: true,
-            data: { records: pendingPayments, total: pendingPayments.length }
+            data: {
+                records: pendingPayments,
+                total: pendingPayments.length,
+                period: {
+                    referenceDate: referenceDate,
+                    label: referenceDate.toLocaleDateString('default', { month: 'long', year: 'numeric' })
+                }
+            }
         });
     } catch (error) {
+        console.error('Get pending payments error:', error);
+        next(error);
+    }
+};
+
+// ============================================================
+// NEW: Get current period payments for a member
+// @route   GET /api/payments/current-period
+// @access  Private
+// ============================================================
+exports.getCurrentPeriodPayments = async (req, res, next) => {
+    try {
+        const userId = req.user.id;
+        const organizationId = req.user.organizationId;
+        const { periodKey } = req.query;
+
+        // If no periodKey provided, use current month
+        let targetPeriodKey = periodKey;
+        if (!targetPeriodKey) {
+            const now = new Date();
+            targetPeriodKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+        }
+
+        const payments = await Payment.find({
+            user: userId,
+            organizationId,
+            periodKey: targetPeriodKey
+        })
+            .populate('paymentTypeId', 'name description frequency amount')
+            .sort({ createdAt: -1 });
+
+        // Calculate summary
+        const totalUnpaid = payments
+            .filter(p => p.status === 'unpaid' || p.status === 'partial')
+            .reduce((sum, p) => sum + (p.remainingAmount || 0), 0);
+
+        const totalPaid = payments
+            .filter(p => p.status === 'paid')
+            .reduce((sum, p) => sum + (p.amount || 0), 0);
+
+        res.status(200).json({
+            success: true,
+            data: {
+                periodKey: targetPeriodKey,
+                payments,
+                summary: {
+                    total: payments.length,
+                    totalUnpaid,
+                    totalPaid,
+                    paidCount: payments.filter(p => p.status === 'paid').length,
+                    unpaidCount: payments.filter(p => p.status === 'unpaid' || p.status === 'partial').length
+                }
+            }
+        });
+    } catch (error) {
+        console.error('Get current period payments error:', error);
+        next(error);
+    }
+};
+
+// ============================================================
+// NEW: Get payment periods for a member (grouped by period)
+// @route   GET /api/payments/periods
+// @access  Private
+// ============================================================
+exports.getPaymentPeriods = async (req, res, next) => {
+    try {
+        const userId = req.user.id;
+        const organizationId = req.user.organizationId;
+
+        // Get all payments with period keys
+        const payments = await Payment.find({
+            user: userId,
+            organizationId,
+            periodKey: { $ne: null }
+        })
+            .populate('paymentTypeId', 'name frequency')
+            .sort({ periodStart: -1 });
+
+        // Group by periodKey
+        const grouped = payments.reduce((acc, p) => {
+            const key = p.periodKey;
+            if (!acc[key]) {
+                acc[key] = {
+                    periodKey: key,
+                    periodStart: p.periodStart,
+                    periodEnd: p.periodEnd,
+                    payments: []
+                };
+            }
+            acc[key].payments.push(p);
+            return acc;
+        }, {});
+
+        // Convert to array and sort
+        const periods = Object.values(grouped).sort((a, b) =>
+            new Date(b.periodStart) - new Date(a.periodStart)
+        );
+
+        // Calculate summary per period
+        const periodsWithSummary = periods.map(period => {
+            const totalAmount = period.payments.reduce((sum, p) => sum + (p.amount || 0), 0);
+            const totalPaid = period.payments
+                .filter(p => p.status === 'paid')
+                .reduce((sum, p) => sum + (p.amount || 0), 0);
+            const totalUnpaid = period.payments
+                .filter(p => p.status === 'unpaid' || p.status === 'partial')
+                .reduce((sum, p) => sum + (p.remainingAmount || 0), 0);
+
+            return {
+                ...period,
+                summary: {
+                    totalAmount,
+                    totalPaid,
+                    totalUnpaid,
+                    paymentCount: period.payments.length,
+                    paidCount: period.payments.filter(p => p.status === 'paid').length,
+                    unpaidCount: period.payments.filter(p => p.status === 'unpaid' || p.status === 'partial').length
+                }
+            };
+        });
+
+        res.status(200).json({
+            success: true,
+            data: periodsWithSummary,
+            count: periodsWithSummary.length
+        });
+    } catch (error) {
+        console.error('Get payment periods error:', error);
         next(error);
     }
 };
@@ -878,7 +1210,7 @@ exports.createMemberPayment = async (req, res, next) => {
     console.log('🔥🔥🔥 createMemberPayment WAS CALLED! 🔥🔥🔥');
     console.log('Request body:', req.body);
     try {
-        const { name, type, amount, description, paymentTypeId } = req.body;
+        const { name, type, amount, description, paymentTypeId, periodStart, periodEnd, periodKey } = req.body;
         const userId = req.user.id;
         const organizationId = req.user.organizationId;
 
@@ -886,15 +1218,42 @@ exports.createMemberPayment = async (req, res, next) => {
             return res.status(400).json({ success: false, message: 'Missing required fields' });
         }
 
+        // NEW: If paymentTypeId is provided, try to auto-fill period info
+        let periodData = {};
+        if (paymentTypeId) {
+            const paymentType = await PaymentType.findById(paymentTypeId);
+            if (paymentType && paymentType.isRecurring()) {
+                const period = paymentType.getPeriodForDate(new Date());
+                periodData = {
+                    periodStart: period.periodStart,
+                    periodEnd: period.periodEnd,
+                    periodKey: paymentType.getPeriodKey(new Date())
+                };
+            }
+        }
+
+        // Use provided period data or auto-generated
+        const finalPeriodStart = periodStart || periodData.periodStart || null;
+        const finalPeriodEnd = periodEnd || periodData.periodEnd || null;
+        const finalPeriodKey = periodKey || periodData.periodKey || null;
+
         // ===== CHECK FOR EXISTING PAYMENTS =====
         // ✅ Use consistent variable name: existingPayment
-        const existingPayment = await Payment.findOne({
+        // NEW: Also check by periodKey if available
+        let existingPaymentQuery = {
             user: userId,
             paymentTypeId,
             organizationId,
             status: { $in: ['unpaid', 'partial', 'pending'] },
             remainingAmount: { $gt: 0 }
-        });
+        };
+
+        // If periodKey is available, check for same period
+        if (finalPeriodKey) {
+            existingPaymentQuery.periodKey = finalPeriodKey;
+        }
+
+        const existingPayment = await Payment.findOne(existingPaymentQuery);
 
         if (existingPayment) {
             // If there's an existing payment, return it
@@ -914,8 +1273,10 @@ exports.createMemberPayment = async (req, res, next) => {
                 message
             });
         }
+
         let transactionReference1 = `PENDING-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
         console.log(`Generated transaction reference: ${transactionReference1}`);
+
         // ===== CREATE NEW PAYMENT =====
         const payment = await Payment.create({
             user: userId,
@@ -931,12 +1292,14 @@ exports.createMemberPayment = async (req, res, next) => {
             description: description || `${name} payment`,
             paymentTypeId: paymentTypeId || null,
             organizationId,
-            status: 'pending',  // ✅ Fixed: just 'pending'
-            transactionReference: transactionReference1  // ✅ Fixed: proper format
-
-
-
+            status: 'pending',
+            transactionReference: transactionReference1,
+            // NEW: Period fields
+            periodStart: finalPeriodStart,
+            periodEnd: finalPeriodEnd,
+            periodKey: finalPeriodKey
         });
+
         // ✅ Force save if field is missing
         if (!payment.transactionReference) {
             console.log('⚠️ transactionReference missing, forcing update...');
