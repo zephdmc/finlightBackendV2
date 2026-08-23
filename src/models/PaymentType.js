@@ -419,14 +419,6 @@ PaymentTypeSchema.methods.getPeriodKey = function (referenceDate = new Date()) {
 // ============================================================
 
 /**
- * Check if this is a dues type
- * @returns {boolean} - True if type is 'dues' or 'monthly_dues'
- */
-PaymentTypeSchema.methods.isDuesType = function () {
-  return this.type === 'dues' || this.type === 'monthly_dues';
-};
-
-/**
  * Get the monthly price for this payment type
  * @returns {number} - The amount (price per month)
  */
@@ -443,7 +435,7 @@ PaymentTypeSchema.methods.shouldAutoGenerate = function () {
   return this.isActive &&
     this.is_mandatory &&
     this.frequency !== 'one-time' &&
-    this.isDuesType();
+    this.isDuesType
 };
 
 /**
@@ -454,7 +446,7 @@ PaymentTypeSchema.methods.shouldAutoGenerate = function () {
 PaymentTypeSchema.methods.isRecurring = function () {
   return this.frequency !== 'one-time' &&
     this.isActive &&
-    this.isDuesType();
+    this.isDuesType
 };
 
 /**
