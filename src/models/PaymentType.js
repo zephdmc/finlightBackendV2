@@ -99,7 +99,9 @@ const PaymentTypeSchema = new mongoose.Schema({
     ref: 'User',
     description: 'Admin who last updated this payment type'
   },
-  // In models/PaymentType.js - Add these fields
+  // ============================================================
+  // LATE PAYMENT PENALTY FIELDS
+  // ============================================================
   late_penalty_enabled: {
     type: Boolean,
     default: false,
@@ -149,6 +151,11 @@ PaymentTypeSchema.index({ organizationId: 1, isActive: 1 });
 PaymentTypeSchema.index({ organizationId: 1, is_mandatory: 1, isActive: 1 });
 PaymentTypeSchema.index({ organizationId: 1, frequency: 1, isActive: 1 });
 
+// ============================================================
+// NEW: Index for dues type queries
+// ============================================================
+PaymentTypeSchema.index({ organizationId: 1, type: 1, isActive: 1 });
+
 // ============= VIRTUAL FIELDS WITH SAFETY CHECKS =============
 
 // Virtual for formatted amount
@@ -177,7 +184,7 @@ PaymentTypeSchema.virtual('frequencyLabel').get(function () {
   }
   const labels = {
     'one-time': 'One Time',
-    'weekly': 'Weekly',        // ← ADDED: weekly label
+    'weekly': 'Weekly',
     'monthly': 'Monthly',
     'quarterly': 'Quarterly',
     'yearly': 'Yearly'
@@ -216,13 +223,27 @@ PaymentTypeSchema.virtual('categoryLabel').get(function () {
   }
   const labels = {
     'dues': 'Dues',
-    'leavy': 'Leavy',
+    'leavy': 'Levy',
     'registration': 'Registration',
     'monthly_dues': 'Monthly Dues',
     'wedding_dues': 'Wedding Dues',
     'charity_dues': 'Charity Dues'
   };
   return labels[this.type] || this.type || 'Dues';
+});
+
+// ============================================================
+// NEW: Virtual to check if this is a dues type (for display)
+// ============================================================
+PaymentTypeSchema.virtual('isDuesType').get(function () {
+  return this.type === 'dues' || this.type === 'monthly_dues';
+});
+
+// ============================================================
+// NEW: Virtual to get monthly price (for Payment model)
+// ============================================================
+PaymentTypeSchema.virtual('monthlyPrice').get(function () {
+  return this.amount;
 });
 
 // ============= INSTANCE METHODS =============
@@ -255,16 +276,10 @@ PaymentTypeSchema.methods.calculateNextDueDate = function (startDate = new Date(
       date.setDate(date.getDate() + (this.duration_value * 7));
       break;
     case 'months':
-      // Handle month-end edge cases properly
-      // Example: Jan 31 + 1 month should be Feb 28/29, not Mar 3
       const originalDay = date.getDate();
       date.setMonth(date.getMonth() + this.duration_value);
-
-      // If the day changed (e.g., Jan 31 → Feb 28/29), we know we wrapped
-      // Keep the last day of the month
       if (date.getDate() !== originalDay) {
-        // We're at the end of the month - keep it
-        // (JavaScript automatically handles Feb 28/29)
+        // Keep the last day of the month
       }
       break;
     case 'years':
@@ -274,7 +289,6 @@ PaymentTypeSchema.methods.calculateNextDueDate = function (startDate = new Date(
       return null;
   }
 
-  // If endOfMonth is true, set to last day of that month
   if (endOfMonth && this.duration_unit === 'months') {
     date.setDate(1);
     date.setMonth(date.getMonth() + 1);
@@ -307,33 +321,27 @@ PaymentTypeSchema.methods.getPeriodForDate = function (referenceDate = new Date(
 
   switch (this.frequency) {
     case 'weekly': {
-      // Start of week (Monday)
       const day = date.getDay();
-      const diff = day === 0 ? 6 : day - 1; // Monday is 1, Sunday is 0
+      const diff = day === 0 ? 6 : day - 1;
       periodStart.setDate(date.getDate() - diff);
       periodStart.setHours(0, 0, 0, 0);
 
-      // End of week (Sunday)
       periodEnd = new Date(periodStart);
       periodEnd.setDate(periodEnd.getDate() + 6);
       periodEnd.setHours(23, 59, 59, 999);
 
-      // Label: "Week 34, 2026" or "Aug 17-23, 2026"
       const weekNumber = getWeekNumber(periodStart);
       periodLabel = `Week ${weekNumber}, ${periodStart.getFullYear()}`;
       break;
     }
 
     case 'monthly': {
-      // Start of month
       periodStart = new Date(date.getFullYear(), date.getMonth(), 1);
       periodStart.setHours(0, 0, 0, 0);
 
-      // End of month
       periodEnd = new Date(date.getFullYear(), date.getMonth() + 1, 0);
       periodEnd.setHours(23, 59, 59, 999);
 
-      // Label: "August 2026"
       periodLabel = periodStart.toLocaleString('default', {
         month: 'long',
         year: 'numeric'
@@ -342,37 +350,30 @@ PaymentTypeSchema.methods.getPeriodForDate = function (referenceDate = new Date(
     }
 
     case 'quarterly': {
-      // Start of quarter
       const quarterMonth = Math.floor(date.getMonth() / 3) * 3;
       periodStart = new Date(date.getFullYear(), quarterMonth, 1);
       periodStart.setHours(0, 0, 0, 0);
 
-      // End of quarter
       periodEnd = new Date(date.getFullYear(), quarterMonth + 3, 0);
       periodEnd.setHours(23, 59, 59, 999);
 
-      // Label: "Q3 2026"
       const quarter = Math.floor(date.getMonth() / 3) + 1;
       periodLabel = `Q${quarter} ${date.getFullYear()}`;
       break;
     }
 
     case 'yearly': {
-      // Start of year
       periodStart = new Date(date.getFullYear(), 0, 1);
       periodStart.setHours(0, 0, 0, 0);
 
-      // End of year
       periodEnd = new Date(date.getFullYear(), 11, 31);
       periodEnd.setHours(23, 59, 59, 999);
 
-      // Label: "2026"
       periodLabel = `${date.getFullYear()}`;
       break;
     }
 
     default: {
-      // one-time
       periodStart = null;
       periodEnd = null;
       periodLabel = 'One-time';
@@ -413,40 +414,66 @@ PaymentTypeSchema.methods.getPeriodKey = function (referenceDate = new Date()) {
   }
 };
 
+// ============================================================
+// DUES-SPECIFIC METHODS (NEW)
+// ============================================================
 
-// NEW: Check if this is a dues type
+/**
+ * Check if this is a dues type
+ * @returns {boolean} - True if type is 'dues' or 'monthly_dues'
+ */
 PaymentTypeSchema.methods.isDuesType = function () {
   return this.type === 'dues' || this.type === 'monthly_dues';
 };
 
-// NEW: Check if this payment type should auto-generate recurring payments
+/**
+ * Get the monthly price for this payment type
+ * @returns {number} - The amount (price per month)
+ */
+PaymentTypeSchema.methods.getMonthlyPrice = function () {
+  return this.amount;
+};
+
+/**
+ * Check if this payment type should auto-generate recurring payments
+ * Only dues types that are mandatory, active, and recurring
+ * @returns {boolean} - True if should auto-generate
+ */
 PaymentTypeSchema.methods.shouldAutoGenerate = function () {
   return this.isActive &&
     this.is_mandatory &&
     this.frequency !== 'one-time' &&
-    this.isDuesType();  // Only dues types auto-generate
+    this.isDuesType();
 };
 
 /**
  * Check if this payment type is recurring
+ * Only dues types with frequency other than 'one-time'
+ * @returns {boolean} - True if recurring
  */
-// UPDATED: Check if this payment type is recurring
 PaymentTypeSchema.methods.isRecurring = function () {
-  // A payment type is recurring if it has a frequency other than 'one-time'
-  // AND it's a dues type (only dues should have recurring billing)
   return this.frequency !== 'one-time' &&
     this.isActive &&
     this.isDuesType();
 };
 
 /**
- * Check if this payment type should generate automatic payments
+ * Check if this payment type is valid (all required fields present)
+ * @returns {boolean} - True if valid
  */
-PaymentTypeSchema.methods.shouldAutoGenerate = function () {
-  return this.isActive && this.is_mandatory && this.frequency !== 'one-time';
+PaymentTypeSchema.methods.isValid = function () {
+  if (!this.isActive) return false;
+  if (!this.name) return false;
+  if (!this.type) return false;
+  if (!this.amount || this.amount <= 0) return false;
+  if (this.frequency !== 'one-time') {
+    if (!this.duration_value || !this.duration_unit) return false;
+  }
+  return true;
 };
 
 // ============= STATIC METHODS (SCOPED BY ORGANIZATION) =============
+
 PaymentTypeSchema.statics.getActiveTypes = function (organizationId) {
   return this.find({ organizationId, isActive: true }).sort({ createdAt: -1 });
 };
@@ -467,34 +494,71 @@ PaymentTypeSchema.statics.getByCategory = function (organizationId, category) {
   return this.find({ organizationId, type: category, isActive: true }).sort({ createdAt: -1 });
 };
 
-/**
- * NEW: Get active recurring payment types for billing generation
- * Includes weekly, monthly, quarterly, yearly (excludes one-time)
- */
-// UPDATED: Get active recurring types (only dues)
+// ============================================================
+// UPDATED: Get active recurring payment types (ONLY DUES)
+// ============================================================
 PaymentTypeSchema.statics.getActiveRecurringTypes = function (organizationId) {
   return this.find({
     organizationId,
     isActive: true,
     frequency: { $in: ['weekly', 'monthly', 'quarterly', 'yearly'] },
-    type: { $in: ['dues', 'monthly_dues'] }  // ← Only dues!
+    type: { $in: ['dues', 'monthly_dues'] }  // Only dues!
   }).sort({ createdAt: -1 });
 };
 
-/**
- * NEW: Get recurring types that should auto-generate (mandatory + active)
- */
-// UPDATED: Get auto-generate types (only dues)
+// ============================================================
+// UPDATED: Get auto-generate types (ONLY DUES)
+// ============================================================
 PaymentTypeSchema.statics.getAutoGenerateTypes = function (organizationId) {
   return this.find({
     organizationId,
     isActive: true,
     is_mandatory: true,
     frequency: { $in: ['weekly', 'monthly', 'quarterly', 'yearly'] },
-    type: { $in: ['dues', 'monthly_dues'] }  // ← Only dues!
+    type: { $in: ['dues', 'monthly_dues'] }  // Only dues!
   }).sort({ createdAt: -1 });
 };
+
+// ============================================================
+// NEW: Get only dues types (both mandatory and optional)
+// ============================================================
+PaymentTypeSchema.statics.getDuesTypes = function (organizationId, includeInactive = false) {
+  const query = {
+    organizationId,
+    type: { $in: ['dues', 'monthly_dues'] }
+  };
+  if (!includeInactive) {
+    query.isActive = true;
+  }
+  return this.find(query).sort({ is_mandatory: -1, name: 1 });
+};
+
+// ============================================================
+// NEW: Get mandatory dues types only
+// ============================================================
+PaymentTypeSchema.statics.getMandatoryDues = function (organizationId) {
+  return this.find({
+    organizationId,
+    type: { $in: ['dues', 'monthly_dues'] },
+    is_mandatory: true,
+    isActive: true
+  }).sort({ name: 1 });
+};
+
+// ============================================================
+// NEW: Get optional dues types only
+// ============================================================
+PaymentTypeSchema.statics.getOptionalDues = function (organizationId) {
+  return this.find({
+    organizationId,
+    type: { $in: ['dues', 'monthly_dues'] },
+    is_mandatory: false,
+    isActive: true
+  }).sort({ name: 1 });
+};
+
 // ============= MIDDLEWARE =============
+
 PaymentTypeSchema.pre('save', function (next) {
   if (this.frequency !== 'one-time') {
     if (!this.duration_value || !this.duration_unit) {
@@ -526,11 +590,8 @@ PaymentTypeSchema.post('remove', function (doc) {
 function getWeekNumber(date) {
   const d = new Date(date);
   d.setHours(0, 0, 0, 0);
-  // Thursday in current week decides the year
   d.setDate(d.getDate() + 3 - (d.getDay() + 6) % 7);
-  // January 4 is always in week 1
   const week1 = new Date(d.getFullYear(), 0, 4);
-  // Calculate weeks between
   return 1 + Math.round(((d - week1) / 86400000 - 3 + (week1.getDay() + 6) % 7) / 7);
 }
 

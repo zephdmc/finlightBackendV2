@@ -24,10 +24,30 @@ const paymentSchema = new mongoose.Schema({
     type: Number,
     required: true,
     min: 0,
-    comment: 'What organization should receive (target amount)'
+    comment: 'Total amount for all months in this transaction'
   },
 
-  // ==================== BILLING PERIOD FIELDS (NEW) ====================
+  // ============================================================
+  // MONTHS ARRAY - One document per transaction
+  // ============================================================
+  months: {
+    type: [String],
+    default: [],
+    index: true,
+    comment: 'Months covered by this transaction (e.g., ["2026-01", "2026-02"])'
+  },
+  monthCount: {
+    type: Number,
+    default: 0,
+    comment: 'Number of months in this transaction'
+  },
+  monthlyPrice: {
+    type: Number,
+    default: 0,
+    comment: 'Price per month (from PaymentType)'
+  },
+
+  // ==================== BILLING PERIOD FIELDS (Legacy Support) ====================
   periodStart: {
     type: Date,
     default: null,
@@ -47,8 +67,6 @@ const paymentSchema = new mongoose.Schema({
 
   transactionReference: {
     type: String,
-    // required: true,
-    // unique: true,  // ❌ REMOVE THIS LINE
     sparse: true
   },
 
@@ -114,7 +132,6 @@ const paymentSchema = new mongoose.Schema({
       type: String,
       comment: 'Transaction reference for this partial payment'
     },
-
     fees: {
       flutterwaveFee: {
         type: Number,
@@ -224,7 +241,14 @@ paymentSchema.index({ organizationId: 1, user: 1, status: 1, remainingAmount: 1 
 // Payment type queries
 paymentSchema.index({ organizationId: 1, paymentTypeId: 1 });
 
-// Period-based queries (NEW - very important)
+// ============================================================
+// NEW: Months array indexes for fast queries
+// ============================================================
+paymentSchema.index({ organizationId: 1, months: 1 });
+paymentSchema.index({ organizationId: 1, user: 1, months: 1 });
+paymentSchema.index({ organizationId: 1, paymentTypeId: 1, months: 1 });
+
+// Period-based queries (legacy support)
 paymentSchema.index({ organizationId: 1, periodKey: 1, status: 1 });
 paymentSchema.index({ organizationId: 1, user: 1, periodKey: 1 });
 paymentSchema.index({ organizationId: 1, paymentTypeId: 1, periodKey: 1 });
@@ -241,41 +265,24 @@ paymentSchema.index({ organizationId: 1, flutterwaveFeeDeducted: 1 });
 paymentSchema.index({ organizationId: 1, platformFeeDeducted: 1 });
 paymentSchema.index({ organizationId: 1, netToOrganization: 1 });
 
-// ==================== UNIQUE COMPOUND INDEX (CRITICAL FOR RECURRING) ====================
-// Prevents duplicate billing period payments
-// One member can only have ONE payment per payment type per period
+// ============================================================
+// UNIQUE INDEX: Prevent duplicate transactions
+// One member can have only ONE pending/unpaid transaction per payment type
+// ============================================================
 paymentSchema.index(
   {
     organizationId: 1,
     user: 1,
     paymentTypeId: 1,
-    periodKey: 1
+    status: 1
   },
   {
     unique: true,
     partialFilterExpression: {
-      periodKey: { $exists: true, $ne: null },
+      status: { $in: ['pending', 'unpaid'] },
       paymentTypeId: { $exists: true, $ne: null }
     },
-    name: 'unique_period_payment'
-  }
-);
-
-// Alternative unique index using periodStart (more strict)
-paymentSchema.index(
-  {
-    organizationId: 1,
-    user: 1,
-    paymentTypeId: 1,
-    periodStart: 1
-  },
-  {
-    unique: true,
-    partialFilterExpression: {
-      periodStart: { $exists: true, $ne: null },
-      paymentTypeId: { $exists: true, $ne: null }
-    },
-    name: 'unique_period_start_payment'
+    name: 'unique_active_payment_per_type'
   }
 );
 
@@ -292,6 +299,11 @@ paymentSchema.index(
 
 paymentSchema.pre('save', function (next) {
   this.updatedAt = new Date();
+
+  // Set monthCount from months array
+  if (this.months && this.months.length > 0) {
+    this.monthCount = this.months.length;
+  }
 
   if (!this.targetOrgAmount && this.amount) {
     this.targetOrgAmount = this.amount;
@@ -313,6 +325,11 @@ paymentSchema.pre('save', function (next) {
   // Auto-generate periodKey if periodStart is set but periodKey isn't
   if (this.periodStart && !this.periodKey) {
     this.periodKey = this.generatePeriodKey();
+  }
+
+  // If months array has data, generate a periodKey from first month
+  if (this.months && this.months.length > 0 && !this.periodKey) {
+    this.periodKey = this.months[0];
   }
 
   next();
@@ -337,25 +354,19 @@ paymentSchema.virtual('totalFeesPaid').get(function () {
   return (this.flutterwaveFeeDeducted || 0) + (this.platformFeeDeducted || 0);
 });
 
-// NEW: Virtual for period display
 paymentSchema.virtual('periodDisplay').get(function () {
+  if (this.months && this.months.length > 0) {
+    return this.months.join(', ');
+  }
   if (!this.periodStart) return 'One-time';
   if (this.periodKey) return this.periodKey;
-
-  const start = this.periodStart;
-  const end = this.periodEnd;
-
-  if (!end) {
-    return start.toLocaleDateString('default', { month: 'long', year: 'numeric' });
-  }
-
-  const startStr = start.toLocaleDateString('default', { month: 'short', day: 'numeric' });
-  const endStr = end.toLocaleDateString('default', { month: 'short', day: 'numeric', year: 'numeric' });
-  return `${startStr} - ${endStr}`;
+  return 'Unknown';
 });
 
-// NEW: Virtual for period summary (e.g., "August 2026")
 paymentSchema.virtual('periodSummary').get(function () {
+  if (this.months && this.months.length > 0) {
+    return `${this.months.length} month(s)`;
+  }
   if (!this.periodStart) return 'One-time';
   return this.periodStart.toLocaleDateString('default', {
     month: 'long',
@@ -363,9 +374,17 @@ paymentSchema.virtual('periodSummary').get(function () {
   });
 });
 
-// NEW: Virtual to check if this is a recurring period payment
 paymentSchema.virtual('isPeriodPayment').get(function () {
-  return this.periodStart !== null && this.periodStart !== undefined;
+  return (this.months && this.months.length > 0) || (this.periodStart !== null && this.periodStart !== undefined);
+});
+
+// ============================================================
+// NEW: Virtual to get months that are NOT paid (for partial)
+// ============================================================
+paymentSchema.virtual('unpaidMonths').get(function () {
+  // This is a placeholder - actual unpaid months tracking
+  // would require a separate model or field
+  return [];
 });
 
 // ==================== INSTANCE METHODS ====================
@@ -381,8 +400,6 @@ paymentSchema.methods.generatePeriodKey = function () {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, '0');
 
-  // Try to determine frequency from payment type
-  // If we can't determine, use month as default
   return `${year}-${month}`;
 };
 
@@ -390,6 +407,9 @@ paymentSchema.methods.generatePeriodKey = function () {
  * Check if this payment belongs to a specific period
  */
 paymentSchema.methods.belongsToPeriod = function (periodKey) {
+  if (this.months && this.months.length > 0) {
+    return this.months.includes(periodKey);
+  }
   if (!this.periodKey) return false;
   return this.periodKey === periodKey;
 };
@@ -456,6 +476,28 @@ paymentSchema.methods.isPayable = function () {
   return this.status !== 'paid' && (this.remainingAmount > 0);
 };
 
+// ============================================================
+// NEW: Add months to this payment (for batch updates)
+// ============================================================
+paymentSchema.methods.addMonths = function (newMonths) {
+  const existingMonths = this.months || [];
+  const uniqueNewMonths = newMonths.filter(m => !existingMonths.includes(m));
+
+  if (uniqueNewMonths.length === 0) {
+    return { added: 0, total: existingMonths.length };
+  }
+
+  this.months = [...existingMonths, ...uniqueNewMonths];
+  this.monthCount = this.months.length;
+  this.amount = this.monthCount * this.monthlyPrice;
+  this.targetOrgAmount = this.amount;
+  this.expectedAmount = Math.ceil(this.amount / 0.96);
+  this.remainingAmount = this.amount - (this.totalPaidSoFar || 0);
+  this.status = 'pending';
+
+  return { added: uniqueNewMonths.length, total: this.months.length };
+};
+
 // ==================== STATIC METHODS ====================
 
 /**
@@ -469,12 +511,10 @@ paymentSchema.statics.findOutstandingByUser = function (userId, organizationId, 
     remainingAmount: { $gt: 0 }
   };
 
-  // Optional: filter by period
   if (options.periodKey) {
-    query.periodKey = options.periodKey;
+    query.months = options.periodKey;
   }
 
-  // Optional: filter by date range
   if (options.fromDate) {
     query.periodStart = { $gte: options.fromDate };
   }
@@ -484,7 +524,7 @@ paymentSchema.statics.findOutstandingByUser = function (userId, organizationId, 
 
   return this.find(query)
     .populate('paymentTypeId', 'name type frequency')
-    .sort({ periodStart: 1, dueDate: 1, createdAt: 1 });
+    .sort({ createdAt: -1 });
 };
 
 /**
@@ -498,9 +538,8 @@ paymentSchema.statics.getTotalOutstandingByUser = async function (userId, organi
     remainingAmount: { $gt: 0 }
   };
 
-  // Optional period filter
   if (options.periodKey) {
-    match.periodKey = options.periodKey;
+    match.months = options.periodKey;
   }
 
   const result = await this.aggregate([
@@ -529,7 +568,7 @@ paymentSchema.statics.findPartialPaymentsByUser = function (userId, organization
 };
 
 /**
- * NEW: Find payments for a specific period and payment type
+ * Find payments for a specific period and payment type
  * Used by the billing scheduler to check if a payment already exists
  */
 paymentSchema.statics.findPeriodPayment = function (organizationId, userId, paymentTypeId, periodKey) {
@@ -537,13 +576,13 @@ paymentSchema.statics.findPeriodPayment = function (organizationId, userId, paym
     organizationId,
     user: userId,
     paymentTypeId,
-    periodKey,
+    months: periodKey,
     status: { $in: ['unpaid', 'partial', 'paid'] }
   });
 };
 
 /**
- * NEW: Find or create a period payment (upsert pattern)
+ * Find or create a period payment (upsert pattern)
  * Used by the billing scheduler
  */
 paymentSchema.statics.findOrCreatePeriodPayment = async function (data) {
@@ -560,15 +599,13 @@ paymentSchema.statics.findOrCreatePeriodPayment = async function (data) {
     isMandatory
   } = data;
 
-  // Try to find existing payment
   let payment = await this.findOne({
     organizationId,
     user,
     paymentTypeId,
-    periodKey
+    months: periodKey
   });
 
-  // If not found, create it
   if (!payment) {
     payment = new this({
       organizationId,
@@ -577,6 +614,9 @@ paymentSchema.statics.findOrCreatePeriodPayment = async function (data) {
       periodStart,
       periodEnd,
       periodKey,
+      months: [periodKey],
+      monthCount: 1,
+      monthlyPrice: amount,
       name,
       type,
       amount,
@@ -593,21 +633,21 @@ paymentSchema.statics.findOrCreatePeriodPayment = async function (data) {
 };
 
 /**
- * NEW: Get all unpaid period payments for a user
+ * Get all unpaid period payments for a user
  */
 paymentSchema.statics.getUnpaidPeriodPayments = function (userId, organizationId) {
   return this.find({
     user: userId,
     organizationId,
     status: 'unpaid',
-    periodKey: { $ne: null, $exists: true }
+    months: { $exists: true, $ne: [] }
   })
     .populate('paymentTypeId', 'name type frequency amount')
-    .sort({ periodStart: 1 });
+    .sort({ createdAt: 1 });
 };
 
 /**
- * NEW: Get payment history with period grouping
+ * Get payment history with period grouping
  */
 paymentSchema.statics.getPaymentHistoryByPeriod = function (userId, organizationId) {
   return this.aggregate([
@@ -615,13 +655,16 @@ paymentSchema.statics.getPaymentHistoryByPeriod = function (userId, organization
       $match: {
         user: mongoose.Types.ObjectId(userId),
         organizationId: mongoose.Types.ObjectId(organizationId),
-        periodKey: { $ne: null, $exists: true }
+        months: { $exists: true, $ne: [] }
       }
+    },
+    {
+      $unwind: '$months'
     },
     {
       $group: {
         _id: {
-          periodKey: '$periodKey',
+          periodKey: '$months',
           paymentTypeId: '$paymentTypeId'
         },
         payments: { $push: '$$ROOT' },
@@ -632,6 +675,40 @@ paymentSchema.statics.getPaymentHistoryByPeriod = function (userId, organization
     },
     { $sort: { '_id.periodKey': -1 } }
   ]);
+};
+
+// ============================================================
+// NEW: Get dues summary for a user (all payments combined)
+// ============================================================
+paymentSchema.statics.getDuesSummary = async function (userId, organizationId) {
+  const payments = await this.find({
+    user: userId,
+    organizationId: organizationId,
+    type: { $in: ['dues', 'monthly_dues'] }
+  });
+
+  const paidMonths = [];
+  const unpaidMonths = [];
+
+  payments.forEach(p => {
+    if (p.months && p.months.length > 0) {
+      if (p.status === 'paid') {
+        paidMonths.push(...p.months);
+      } else {
+        unpaidMonths.push(...p.months);
+      }
+    }
+  });
+
+  return {
+    paidMonths: [...new Set(paidMonths)].sort(),
+    unpaidMonths: [...new Set(unpaidMonths)].sort(),
+    totalPaidMonths: paidMonths.length,
+    totalUnpaidMonths: unpaidMonths.length,
+    totalAmount: payments.reduce((sum, p) => sum + (p.amount || 0), 0),
+    totalPaid: payments.filter(p => p.status === 'paid').reduce((sum, p) => sum + (p.amount || 0), 0),
+    payments: payments
+  };
 };
 
 // ==================== POST HOOKS ====================

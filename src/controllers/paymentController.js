@@ -299,7 +299,7 @@ exports.getOutstandingPayments = async (req, res, next) => {
     try {
         const userId = req.user.id;
         const organizationId = req.user.organizationId;
-        const { periodKey } = req.query; // NEW: optional period filter
+        const { periodKey } = req.query;
 
         const query = {
             user: userId,
@@ -308,7 +308,6 @@ exports.getOutstandingPayments = async (req, res, next) => {
             remainingAmount: { $gt: 0 }
         };
 
-        // NEW: Filter by specific period if provided
         if (periodKey) {
             query.periodKey = periodKey;
         }
@@ -319,7 +318,6 @@ exports.getOutstandingPayments = async (req, res, next) => {
 
         const totalOutstanding = outstandingPayments.reduce((sum, p) => sum + (p.remainingAmount || p.amount), 0);
 
-        // NEW: Group by period for better display
         const groupedByPeriod = outstandingPayments.reduce((acc, p) => {
             const key = p.periodKey || 'one-time';
             if (!acc[key]) acc[key] = [];
@@ -417,7 +415,6 @@ exports.createPayment = async (req, res, next) => {
             return res.status(403).json({ success: false, message: 'User not found in your organization' });
         }
 
-        // NEW: If paymentTypeId is provided, try to auto-fill period info
         let periodData = {};
         if (paymentTypeId) {
             const paymentType = await PaymentType.findById(paymentTypeId);
@@ -431,7 +428,6 @@ exports.createPayment = async (req, res, next) => {
             }
         }
 
-        // Use provided period data or auto-generated
         const finalPeriodStart = periodStart || periodData.periodStart || null;
         const finalPeriodEnd = periodEnd || periodData.periodEnd || null;
         const finalPeriodKey = periodKey || periodData.periodKey || null;
@@ -451,7 +447,6 @@ exports.createPayment = async (req, res, next) => {
             paymentTypeId: paymentTypeId || null,
             organizationId,
             status: 'unpaid',
-            // NEW: Period fields
             periodStart: finalPeriodStart,
             periodEnd: finalPeriodEnd,
             periodKey: finalPeriodKey
@@ -591,7 +586,7 @@ exports.getPublicIncome = async (req, res, next) => {
                 paymentType: source,
                 isPartial: payment.isPartial,
                 remainingAmount: payment.remainingAmount,
-                periodKey: payment.periodKey // NEW: include period info
+                periodKey: payment.periodKey
             };
         });
 
@@ -622,7 +617,7 @@ exports.getPaymentSummary = async (req, res, next) => {
             matchCondition.createdAt = { $gte: new Date(startDate), $lte: new Date(endDate) };
         }
         if (type) matchCondition.type = type;
-        if (periodKey) matchCondition.periodKey = periodKey; // NEW: filter by period
+        if (periodKey) matchCondition.periodKey = periodKey;
 
         const [summary, byType, byStatus, byPeriod] = await Promise.all([
             Payment.aggregate([
@@ -647,7 +642,6 @@ exports.getPaymentSummary = async (req, res, next) => {
                 { $match: matchCondition },
                 { $group: { _id: '$status', total: { $sum: '$amount' }, count: { $sum: 1 } } }
             ]),
-            // NEW: Group by period
             Payment.aggregate([
                 { $match: { ...matchCondition, periodKey: { $ne: null } } },
                 { $group: { _id: '$periodKey', total: { $sum: '$amount' }, count: { $sum: 1 } } },
@@ -661,7 +655,7 @@ exports.getPaymentSummary = async (req, res, next) => {
                 summary: summary[0] || { totalAmount: 0, totalPaid: 0, totalUnpaid: 0, count: 0, paidCount: 0, unpaidCount: 0 },
                 byType,
                 byStatus,
-                byPeriod // NEW: period breakdown
+                byPeriod
             }
         });
     } catch (error) {
@@ -683,12 +677,10 @@ exports.getUserPayments = async (req, res, next) => {
             organizationId
         };
 
-        // NEW: Filter by period
         if (periodKey) {
             query.periodKey = periodKey;
         }
 
-        // Filter by status
         if (status) {
             query.status = status;
         }
@@ -699,7 +691,6 @@ exports.getUserPayments = async (req, res, next) => {
             .sort({ periodStart: -1, createdAt: -1 })
             .limit(parseInt(limit));
 
-        // NEW: Group by period for better UI
         const groupedByPeriod = payments.reduce((acc, p) => {
             const key = p.periodKey || 'one-time';
             if (!acc[key]) acc[key] = [];
@@ -707,7 +698,6 @@ exports.getUserPayments = async (req, res, next) => {
             return acc;
         }, {});
 
-        // Calculate summary
         const totalUnpaid = payments
             .filter(p => p.status === 'unpaid' || p.status === 'partial')
             .reduce((sum, p) => sum + (p.remainingAmount || 0), 0);
@@ -749,7 +739,7 @@ exports.getAllPayments = async (req, res, next) => {
         if (status) query.status = status;
         if (type) query.type = type;
         if (userId) query.user = userId;
-        if (periodKey) query.periodKey = periodKey; // NEW
+        if (periodKey) query.periodKey = periodKey;
         if (startDate && endDate) {
             query.createdAt = { $gte: new Date(startDate), $lte: new Date(endDate) };
         }
@@ -858,7 +848,6 @@ exports.updatePayment = async (req, res, next) => {
         }
         if (dueDate) payment.dueDate = dueDate;
         if (description) payment.description = description;
-        // NEW: Period fields
         if (periodStart) payment.periodStart = periodStart;
         if (periodEnd) payment.periodEnd = periodEnd;
         if (periodKey) payment.periodKey = periodKey;
@@ -911,23 +900,17 @@ exports.getPendingPayments = async (req, res, next) => {
     try {
         const userId = req.user.id;
         const organizationId = req.user.organizationId;
-        const { periodKey } = req.query; // Optional period filter
+        const { periodKey } = req.query;
 
-        // Get all active payment types
         const paymentTypes = await PaymentType.find({ isActive: true, organizationId });
 
-        // Get the current period key for each payment type
-        // NEW: Determine which period we're checking
         const referenceDate = new Date();
 
-        // Get all payments the user has already paid (for current periods)
-        // Instead of checking "ever paid", check "paid for current period"
         const currentPeriodKeys = paymentTypes
             .filter(pt => pt.isRecurring())
             .map(pt => pt.getPeriodKey(referenceDate))
             .filter(Boolean);
 
-        // Get paid payments for current periods
         const paidPayments = await Payment.find({
             user: userId,
             organizationId,
@@ -937,7 +920,6 @@ exports.getPendingPayments = async (req, res, next) => {
 
         const paidTypeIds = paidPayments.map(p => p.paymentTypeId?.toString()).filter(Boolean);
 
-        // Also get payments that are unpaid (already exists)
         const unpaidPayments = await Payment.find({
             user: userId,
             organizationId,
@@ -947,21 +929,17 @@ exports.getPendingPayments = async (req, res, next) => {
 
         const unpaidTypeIds = unpaidPayments.map(p => p.paymentTypeId?.toString()).filter(Boolean);
 
-        // Determine pending payment types
         const pendingPaymentTypes = paymentTypes.filter(type => {
             const typeId = type._id.toString();
 
-            // If it's recurring, check if paid for current period
             if (type.isRecurring()) {
                 const currentKey = type.getPeriodKey(referenceDate);
-                // Already paid for this period
                 if (paidPayments.some(p =>
                     p.paymentTypeId?.toString() === typeId &&
                     p.periodKey === currentKey
                 )) {
                     return false;
                 }
-                // Already has an unpaid record for this period
                 if (unpaidPayments.some(p =>
                     p.paymentTypeId?.toString() === typeId &&
                     p.periodKey === currentKey
@@ -971,11 +949,9 @@ exports.getPendingPayments = async (req, res, next) => {
                 return true;
             }
 
-            // For one-time payments: check if ever paid
             return !paidTypeIds.includes(typeId) && !unpaidTypeIds.includes(typeId);
         });
 
-        // Build response with period info
         const pendingPayments = pendingPaymentTypes.map(type => {
             const periodInfo = type.isRecurring()
                 ? type.getPeriodForDate(referenceDate)
@@ -1026,7 +1002,6 @@ exports.getCurrentPeriodPayments = async (req, res, next) => {
         const organizationId = req.user.organizationId;
         const { periodKey } = req.query;
 
-        // If no periodKey provided, use current month
         let targetPeriodKey = periodKey;
         if (!targetPeriodKey) {
             const now = new Date();
@@ -1041,7 +1016,6 @@ exports.getCurrentPeriodPayments = async (req, res, next) => {
             .populate('paymentTypeId', 'name description frequency amount')
             .sort({ createdAt: -1 });
 
-        // Calculate summary
         const totalUnpaid = payments
             .filter(p => p.status === 'unpaid' || p.status === 'partial')
             .reduce((sum, p) => sum + (p.remainingAmount || 0), 0);
@@ -1080,7 +1054,6 @@ exports.getPaymentPeriods = async (req, res, next) => {
         const userId = req.user.id;
         const organizationId = req.user.organizationId;
 
-        // Get all payments with period keys
         const payments = await Payment.find({
             user: userId,
             organizationId,
@@ -1089,7 +1062,6 @@ exports.getPaymentPeriods = async (req, res, next) => {
             .populate('paymentTypeId', 'name frequency')
             .sort({ periodStart: -1 });
 
-        // Group by periodKey
         const grouped = payments.reduce((acc, p) => {
             const key = p.periodKey;
             if (!acc[key]) {
@@ -1104,12 +1076,10 @@ exports.getPaymentPeriods = async (req, res, next) => {
             return acc;
         }, {});
 
-        // Convert to array and sort
         const periods = Object.values(grouped).sort((a, b) =>
             new Date(b.periodStart) - new Date(a.periodStart)
         );
 
-        // Calculate summary per period
         const periodsWithSummary = periods.map(period => {
             const totalAmount = period.payments.reduce((sum, p) => sum + (p.amount || 0), 0);
             const totalPaid = period.payments
@@ -1203,14 +1173,28 @@ exports.getPaymentStats = async (req, res, next) => {
     }
 };
 
-// @desc    Create payment for member (no admin required, used by gateway)
+// ============================================================
+// UPDATED: Create payment for member (HYBRID DUES IMPLEMENTATION)
 // @route   POST /api/payments/member-payment
 // @access  Private
+// ============================================================
 exports.createMemberPayment = async (req, res, next) => {
     console.log('🔥🔥🔥 createMemberPayment WAS CALLED! 🔥🔥🔥');
     console.log('Request body:', req.body);
     try {
-        const { name, type, amount, description, paymentTypeId, periodStart, periodEnd, periodKey } = req.body;
+        const {
+            name,
+            type,
+            amount,
+            description,
+            paymentTypeId,
+            periodStart,
+            periodEnd,
+            periodKey,
+            months,           // ← NEW: Array of months
+            monthCount,       // ← NEW: Number of months
+            monthlyPrice      // ← NEW: Price per month
+        } = req.body;
         const userId = req.user.id;
         const organizationId = req.user.organizationId;
 
@@ -1218,85 +1202,157 @@ exports.createMemberPayment = async (req, res, next) => {
             return res.status(400).json({ success: false, message: 'Missing required fields' });
         }
 
-        // NEW: If paymentTypeId is provided, try to auto-fill period info
-        let periodData = {};
+        // ============================================================
+        // HYBRID DUES IMPLEMENTATION: Check if this is a dues payment with months
+        // ============================================================
+        const isDuesPayment = (type === 'dues' || type === 'monthly_dues') && months && months.length > 0;
+
+        // If it's a dues payment with months, validate months
+        if (isDuesPayment) {
+            if (!months || months.length === 0) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Please select at least one month for dues payment'
+                });
+            }
+            console.log(`📅 Dues payment for months: ${months.join(', ')} (${months.length} months)`);
+        }
+
+        // ============================================================
+        // NEW: If paymentTypeId is provided, get the payment type
+        // ============================================================
+        let paymentType = null;
         if (paymentTypeId) {
-            const paymentType = await PaymentType.findById(paymentTypeId);
-            if (paymentType && paymentType.isRecurring()) {
-                const period = paymentType.getPeriodForDate(new Date());
-                periodData = {
-                    periodStart: period.periodStart,
-                    periodEnd: period.periodEnd,
-                    periodKey: paymentType.getPeriodKey(new Date())
-                };
-            }
+            paymentType = await PaymentType.findById(paymentTypeId);
         }
 
-        // Use provided period data or auto-generated
-        const finalPeriodStart = periodStart || periodData.periodStart || null;
-        const finalPeriodEnd = periodEnd || periodData.periodEnd || null;
-        const finalPeriodKey = periodKey || periodData.periodKey || null;
-
-        // ===== CHECK FOR EXISTING PAYMENTS =====
-        // ✅ Use consistent variable name: existingPayment
-        // NEW: Also check by periodKey if available
-        let existingPaymentQuery = {
-            user: userId,
-            paymentTypeId,
-            organizationId,
-            status: { $in: ['unpaid', 'partial', 'pending'] },
-            remainingAmount: { $gt: 0 }
-        };
-
-        // If periodKey is available, check for same period
-        if (finalPeriodKey) {
-            existingPaymentQuery.periodKey = finalPeriodKey;
-        }
-
-        const existingPayment = await Payment.findOne(existingPaymentQuery);
-
-        if (existingPayment) {
-            // If there's an existing payment, return it
-            let message = 'You already have a payment for this type.';
-
-            if (existingPayment.status === 'pending') {
-                message = 'You have a pending payment. Please complete or cancel it first.';
-            } else if (existingPayment.status === 'partial') {
-                message = `You have an outstanding balance of ₦${existingPayment.remainingAmount.toLocaleString()}. Please complete the payment.`;
-            } else if (existingPayment.status === 'unpaid') {
-                message = 'You have an unpaid payment. Please complete the payment.';
-            }
-
-            return res.status(200).json({
-                success: true,
-                data: existingPayment,
-                message
+        // ============================================================
+        // HYBRID: For dues, check if there's already an active payment for this user
+        // ============================================================
+        let existingPayment = null;
+        if (isDuesPayment && paymentType) {
+            // Check if user already has an active (unpaid/partial/pending) payment for this dues type
+            existingPayment = await Payment.findOne({
+                user: userId,
+                paymentTypeId: paymentTypeId,
+                organizationId: organizationId,
+                status: { $in: ['unpaid', 'partial', 'pending'] }
             });
+
+            if (existingPayment) {
+                // ============================================================
+                // EXISTING PAYMENT FOUND - ADD NEW MONTHS TO IT
+                // ============================================================
+                console.log(`📝 Adding ${months.length} month(s) to existing payment: ${existingPayment._id}`);
+
+                // Filter out months that are already in the payment
+                const existingMonths = existingPayment.months || [];
+                const newMonths = months.filter(m => !existingMonths.includes(m));
+
+                if (newMonths.length === 0) {
+                    return res.status(400).json({
+                        success: false,
+                        message: 'All selected months are already in your payment. Please select different months.',
+                        data: {
+                            existingMonths: existingMonths,
+                            selectedMonths: months
+                        }
+                    });
+                }
+
+                // Calculate new totals
+                const monthlyPriceFromType = paymentType.amount || amount;
+                const allMonths = [...existingMonths, ...newMonths];
+                const totalAmount = allMonths.length * monthlyPriceFromType;
+                const totalPayable = Math.ceil(totalAmount / 0.96);
+
+                // Update the payment
+                existingPayment.months = allMonths;
+                existingPayment.monthCount = allMonths.length;
+                existingPayment.monthlyPrice = monthlyPriceFromType;
+                existingPayment.amount = totalAmount;
+                existingPayment.targetOrgAmount = totalAmount;
+                existingPayment.expectedAmount = totalPayable;
+                existingPayment.remainingAmount = totalAmount - (existingPayment.totalPaidSoFar || 0);
+                existingPayment.status = 'pending';
+                existingPayment.description = description || `${name} - ${allMonths.join(', ')}`;
+
+                // Generate new transaction reference
+                existingPayment.transactionReference = `PAY-${existingPayment._id}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+
+                await existingPayment.save();
+
+                console.log(`✅ Payment updated with ${newMonths.length} new month(s). Total: ${allMonths.length} months`);
+
+                return res.status(200).json({
+                    success: true,
+                    data: existingPayment,
+                    message: `Added ${newMonths.length} month(s) to your payment. Total: ${allMonths.length} months.`,
+                    isUpdate: true,
+                    addedMonths: newMonths,
+                    totalMonths: allMonths.length,
+                    previousMonths: existingMonths
+                });
+            }
         }
 
-        let transactionReference1 = `PENDING-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-        console.log(`Generated transaction reference: ${transactionReference1}`);
+        // ============================================================
+        // NO EXISTING PAYMENT - CREATE NEW
+        // ============================================================
+
+        // Calculate amount and period info
+        let finalAmount = amount;
+        let finalTargetOrgAmount = amount;
+        let finalExpectedAmount = Math.ceil(amount / 0.96);
+        let finalRemainingAmount = amount;
+        let finalMonths = [];
+        let finalMonthCount = 0;
+        let finalMonthlyPrice = amount;
+
+        // If dues payment with months, calculate total
+        if (isDuesPayment && paymentType) {
+            finalMonthlyPrice = paymentType.amount || amount;
+            finalMonths = months;
+            finalMonthCount = months.length;
+            finalAmount = months.length * finalMonthlyPrice;
+            finalTargetOrgAmount = finalAmount;
+            finalExpectedAmount = Math.ceil(finalAmount / 0.96);
+            finalRemainingAmount = finalAmount;
+        }
+
+        // If periodKey not provided but months exist, use first month as periodKey
+        let finalPeriodKey = periodKey;
+        if (!finalPeriodKey && finalMonths.length > 0) {
+            finalPeriodKey = finalMonths[0];
+        }
+
+        // Generate transaction reference
+        let transactionReference = `PENDING-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
         // ===== CREATE NEW PAYMENT =====
         const payment = await Payment.create({
             user: userId,
             name,
             type,
-            amount,
-            targetOrgAmount: amount,
-            expectedAmount: amount,
+            amount: finalAmount,
+            targetOrgAmount: finalTargetOrgAmount,
+            expectedAmount: finalExpectedAmount,
             paidAmount: 0,
-            remainingAmount: amount,
+            remainingAmount: finalRemainingAmount,
             totalPaidSoFar: 0,
             isPartial: false,
-            description: description || `${name} payment`,
+            description: description || `${name} payment${finalMonths.length > 0 ? ` - ${finalMonths.join(', ')}` : ''}`,
             paymentTypeId: paymentTypeId || null,
             organizationId,
             status: 'pending',
-            transactionReference: transactionReference1,
-            // NEW: Period fields
-            periodStart: finalPeriodStart,
-            periodEnd: finalPeriodEnd,
+            transactionReference: transactionReference,
+            // NEW: Months fields for hybrid dues
+            months: finalMonths,
+            monthCount: finalMonthCount,
+            monthlyPrice: finalMonthlyPrice,
+            // Legacy period fields
+            periodStart: periodStart || null,
+            periodEnd: periodEnd || null,
             periodKey: finalPeriodKey
         });
 
@@ -1306,23 +1362,301 @@ exports.createMemberPayment = async (req, res, next) => {
             await Payment.findByIdAndUpdate(payment._id, {
                 $set: { transactionReference: `PENDING-${Date.now()}-${Math.random().toString(36).substr(2, 9)}` }
             });
-            // Re-fetch the payment
             const updated = await Payment.findById(payment._id);
             console.log(`✅ After force update: ${updated.transactionReference}`);
         }
 
         console.log(`✅ Payment created with reference: ${payment.transactionReference} type: ${payment.type} amount: ₦${payment.amount.toLocaleString()}`);
+        console.log(`📅 Months: ${payment.months ? payment.months.join(', ') : 'N/A'}`);
 
         res.status(201).json({
             success: true,
             data: payment,
-            message: 'Payment created successfully'
+            message: isDuesPayment
+                ? `Payment created for ${payment.monthCount} month(s): ${payment.months.join(', ')}`
+                : 'Payment created successfully'
         });
+
     } catch (error) {
         console.error('Member payment creation error:', error);
         res.status(500).json({
             success: false,
             message: error.message || 'Failed to create payment'
+        });
+    }
+};
+
+// ============================================================
+// NEW: Get dues summary for a member (Hybrid approach)
+// @route   GET /api/payments/dues-summary
+// @access  Private
+// ============================================================
+exports.getDuesSummary = async (req, res, next) => {
+    try {
+        const userId = req.user.id;
+        const organizationId = req.user.organizationId;
+
+        // Get all dues payments for this user
+        const payments = await Payment.find({
+            user: userId,
+            organizationId: organizationId,
+            type: { $in: ['dues', 'monthly_dues'] }
+        }).populate('paymentTypeId', 'name amount frequency is_mandatory');
+
+        // Collect all months
+        const paidMonths = [];
+        const unpaidMonths = [];
+        const pendingMonths = [];
+        let totalPaid = 0;
+        let totalRemaining = 0;
+        let totalMonths = 0;
+
+        payments.forEach(payment => {
+            const months = payment.months || [];
+            if (months.length === 0) {
+                // If no months array, use periodKey as fallback
+                if (payment.periodKey) {
+                    months.push(payment.periodKey);
+                }
+            }
+
+            months.forEach(month => {
+                totalMonths++;
+                if (payment.status === 'paid') {
+                    paidMonths.push(month);
+                    totalPaid += (payment.amount / months.length);
+                } else if (payment.status === 'pending') {
+                    pendingMonths.push(month);
+                } else {
+                    unpaidMonths.push(month);
+                    totalRemaining += (payment.remainingAmount / months.length || payment.amount / months.length);
+                }
+            });
+        });
+
+        // Remove duplicates
+        const uniquePaidMonths = [...new Set(paidMonths)].sort();
+        const uniqueUnpaidMonths = [...new Set(unpaidMonths)].sort();
+        const uniquePendingMonths = [...new Set(pendingMonths)].sort();
+
+        // Generate all months in the current year for comparison
+        const currentYear = new Date().getFullYear();
+        const allMonths = [];
+        for (let i = 0; i < 12; i++) {
+            const date = new Date(currentYear, i, 1);
+            const monthKey = `${currentYear}-${String(i + 1).padStart(2, '0')}`;
+            const monthName = date.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+
+            let status = 'not_created';
+            if (uniquePaidMonths.includes(monthKey)) {
+                status = 'paid';
+            } else if (uniquePendingMonths.includes(monthKey)) {
+                status = 'pending';
+            } else if (uniqueUnpaidMonths.includes(monthKey)) {
+                status = 'unpaid';
+            }
+
+            allMonths.push({
+                key: monthKey,
+                name: monthName,
+                status,
+                isCurrent: i === new Date().getMonth(),
+                isPast: i < new Date().getMonth() || currentYear < new Date().getFullYear()
+            });
+        }
+
+        res.status(200).json({
+            success: true,
+            data: {
+                summary: {
+                    totalMonths,
+                    paidMonths: uniquePaidMonths.length,
+                    unpaidMonths: uniqueUnpaidMonths.length,
+                    pendingMonths: uniquePendingMonths.length,
+                    totalPaid: totalPaid,
+                    totalRemaining: totalRemaining
+                },
+                paidMonths: uniquePaidMonths,
+                unpaidMonths: uniqueUnpaidMonths,
+                pendingMonths: uniquePendingMonths,
+                allMonths: allMonths,
+                payments: payments
+            }
+        });
+
+    } catch (error) {
+        console.error('Get dues summary error:', error);
+        res.status(500).json({
+            success: false,
+            message: error.message || 'Failed to get dues summary'
+        });
+    }
+};
+
+// ============================================================
+// NEW: Get a single dues payment by ID (with month details)
+// @route   GET /api/payments/dues-payment/:id
+// @access  Private
+// ============================================================
+exports.getDuesPaymentById = async (req, res, next) => {
+    try {
+        const userId = req.user.id;
+        const organizationId = req.user.organizationId;
+        const { id } = req.params;
+
+        const payment = await Payment.findOne({
+            _id: id,
+            user: userId,
+            organizationId: organizationId,
+            type: { $in: ['dues', 'monthly_dues'] }
+        }).populate('paymentTypeId', 'name amount frequency is_mandatory');
+
+        if (!payment) {
+            return res.status(404).json({
+                success: false,
+                message: 'Dues payment not found'
+            });
+        }
+
+        // Calculate progress
+        const totalMonths = payment.months ? payment.months.length : 0;
+        const paidMonths = payment.status === 'paid' ? totalMonths : 0;
+        const progress = totalMonths > 0 ? (paidMonths / totalMonths) * 100 : 0;
+
+        res.status(200).json({
+            success: true,
+            data: {
+                payment,
+                progress,
+                totalMonths,
+                paidMonths,
+                remainingMonths: totalMonths - paidMonths
+            }
+        });
+
+    } catch (error) {
+        console.error('Get dues payment by ID error:', error);
+        res.status(500).json({
+            success: false,
+            message: error.message || 'Failed to get dues payment'
+        });
+    }
+};
+
+// ============================================================
+// NEW: Admin - Create dues payments for a member (bulk)
+// @route   POST /api/payments/admin/create-dues
+// @access  Private/Admin
+// ============================================================
+exports.adminCreateDuesPayment = async (req, res, next) => {
+    try {
+        const { userId, paymentTypeId, months, name, type, amount } = req.body;
+        const organizationId = req.user.organizationId;
+
+        if (!userId || !paymentTypeId || !months || months.length === 0) {
+            return res.status(400).json({
+                success: false,
+                message: 'User ID, payment type ID, and months are required'
+            });
+        }
+
+        const targetUser = await User.findOne({ _id: userId, organizationId });
+        if (!targetUser) {
+            return res.status(403).json({
+                success: false,
+                message: 'User not found in your organization'
+            });
+        }
+
+        const paymentType = await PaymentType.findOne({
+            _id: paymentTypeId,
+            organizationId,
+            isActive: true
+        });
+
+        if (!paymentType) {
+            return res.status(404).json({
+                success: false,
+                message: 'Payment type not found or inactive'
+            });
+        }
+
+        // Check if user already has an active payment for this type
+        const existingPayment = await Payment.findOne({
+            user: userId,
+            paymentTypeId: paymentTypeId,
+            organizationId,
+            status: { $in: ['unpaid', 'partial', 'pending'] }
+        });
+
+        if (existingPayment) {
+            // Add months to existing payment
+            const existingMonths = existingPayment.months || [];
+            const newMonths = months.filter(m => !existingMonths.includes(m));
+
+            if (newMonths.length === 0) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'All selected months are already in the payment'
+                });
+            }
+
+            const allMonths = [...existingMonths, ...newMonths];
+            const totalAmount = allMonths.length * paymentType.amount;
+
+            existingPayment.months = allMonths;
+            existingPayment.monthCount = allMonths.length;
+            existingPayment.amount = totalAmount;
+            existingPayment.targetOrgAmount = totalAmount;
+            existingPayment.expectedAmount = Math.ceil(totalAmount / 0.96);
+            existingPayment.remainingAmount = totalAmount - (existingPayment.totalPaidSoFar || 0);
+            existingPayment.status = 'unpaid';
+
+            await existingPayment.save();
+
+            return res.status(200).json({
+                success: true,
+                data: existingPayment,
+                message: `Added ${newMonths.length} month(s) to existing payment. Total: ${allMonths.length} months.`
+            });
+        }
+
+        // Create new payment
+        const totalAmount = months.length * paymentType.amount;
+        const transactionReference = `ADMIN-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+
+        const payment = await Payment.create({
+            user: userId,
+            name: name || paymentType.name,
+            type: type || paymentType.type,
+            amount: totalAmount,
+            targetOrgAmount: totalAmount,
+            expectedAmount: Math.ceil(totalAmount / 0.96),
+            remainingAmount: totalAmount,
+            totalPaidSoFar: 0,
+            isPartial: false,
+            description: `${paymentType.name} - ${months.join(', ')}`,
+            paymentTypeId: paymentTypeId,
+            organizationId,
+            status: 'unpaid',
+            transactionReference: transactionReference,
+            months: months,
+            monthCount: months.length,
+            monthlyPrice: paymentType.amount,
+            periodKey: months[0]
+        });
+
+        res.status(201).json({
+            success: true,
+            data: payment,
+            message: `Created dues payment for ${months.length} month(s)`
+        });
+
+    } catch (error) {
+        console.error('Admin create dues payment error:', error);
+        res.status(500).json({
+            success: false,
+            message: error.message || 'Failed to create dues payment'
         });
     }
 };
