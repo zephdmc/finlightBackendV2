@@ -98,6 +98,33 @@ const PaymentTypeSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
     description: 'Admin who last updated this payment type'
+  },
+  // In models/PaymentType.js - Add these fields
+  late_penalty_enabled: {
+    type: Boolean,
+    default: false,
+    description: 'Whether late payment penalty applies'
+  },
+  late_penalty_type: {
+    type: String,
+    enum: ['fixed', 'percentage'],
+    default: 'fixed',
+    description: 'Fixed amount or percentage'
+  },
+  late_penalty_value: {
+    type: Number,
+    default: null,
+    description: 'Penalty amount (fixed or percentage)'
+  },
+  late_penalty_days_after: {
+    type: Number,
+    default: 7,
+    description: 'Days after due date when penalty applies'
+  },
+  due_date_after: {
+    type: Number,
+    default: 30,
+    description: 'Days after creation when payment is due'
   }
 }, {
   timestamps: true,
