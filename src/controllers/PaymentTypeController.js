@@ -1151,71 +1151,8 @@ const mongoose = require('mongoose');
 const { notifyOrganization } = require('../services/notificationService');
 const { sendPaymentTypeNotificationEmail } = require('../services/emailService');
 
-/**
- * Helper: Get organizationId from authenticated user
- * All queries will be scoped to this organization
- */
-const getOrgId = (req) => req.user.organizationId;
 
-/**
- * Helper: Send payment type notification to all members
- */
-const sendPaymentTypeNotifications = async (paymentType, organizationId, organizationName, isUpdate = false) => {
-  try {
-    const members = await User.find(
-      {
-        organizationId,
-        role: 'member',
-        isActive: true,
-        email: { $ne: null, $regex: /\S+@\S+\.\S+/, $ne: '' }
-      },
-      { name: 1, email: 1 }
-    );
 
-    if (members.length === 0) {
-      console.log('⚠️ No active members with valid emails found');
-      return { total: 0, sent: 0, failed: 0 };
-    }
-
-    console.log(`📧 Sending ${isUpdate ? 'update' : 'new'} payment type notifications to ${members.length} members`);
-
-    let sent = 0;
-    let failed = 0;
-
-    for (const member of members) {
-      try {
-        const loginUrl = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/login`;
-        const paymentsUrl = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/member/payments`;
-
-        await sendPaymentTypeNotificationEmail(
-          member.email,
-          member.name,
-          paymentType,
-          organizationName,
-          loginUrl,
-          paymentsUrl,
-          isUpdate
-        );
-
-        sent++;
-        console.log(`✅ Email sent to ${member.email} (${sent}/${members.length})`);
-
-        await new Promise(resolve => setTimeout(resolve, 100));
-
-      } catch (emailError) {
-        failed++;
-        console.error(`❌ Failed to send email to ${member.email}:`, emailError.message);
-      }
-    }
-
-    console.log(`📧 Payment type notifications completed: ${sent} sent, ${failed} failed`);
-    return { total: members.length, sent, failed };
-
-  } catch (error) {
-    console.error('❌ Error sending payment type notifications:', error);
-    return { total: 0, sent: 0, failed: 0, error: error.message };
-  }
-};
 
 /**
  * @desc    Get all payment types (scoped to organization)
