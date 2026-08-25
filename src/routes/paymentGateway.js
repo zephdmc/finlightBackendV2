@@ -657,15 +657,15 @@ router.post('/initialize', protect, paymentInitLimiter, validatePaymentInit, asy
                 target_org_amount: targetOrgAmount,
                 member_pay_amount: memberPayAmount,
                 platform_fee: platformFeeAmount,
-                is_partial_payment: isPartialPayment,
-                custom_amount: customAmount || null,
-                remaining_balance: isPartialPayment ? targetOrgAmount - customAmount : 0,
+                is_partial_payment: isPartialPayment ? 'true' : 'false', // ← Convert to string
+                custom_amount: customAmount ? customAmount.toString() : '0', // ← Convert to string
+                remaining_balance: isPartialPayment ? (targetOrgAmount - customAmount).toString() : '0',
                 // ============================================================
                 // HYBRID DUES: Add month info for tracking
                 // ============================================================
                 is_hybrid_dues: !!(payment.months && payment.months.length > 0),
                 month_count: payment.monthCount || 0,
-                months: payment.months || []
+                months: (payment.months || []).join(',') // ← Convert array to comma-separated string
             }
         };
 
