@@ -274,12 +274,13 @@ const calculateNetToOrganization = (amountPaid, targetOrgAmount = null) => {
 // ============================================================
 // HYBRID DUES HELPER: Mark months as paid
 // ============================================================
+// ============================================================
+// UPDATED: HYBRID DUES HELPER - Mark months as paid with penalty tracking
+// ============================================================
 const markHybridDuesMonthsAsPaid = async (payment, amountPaid) => {
     try {
-        // If payment has months array, calculate which months are covered
         const months = payment.months || [];
         if (months.length === 0) {
-            // No months array - legacy payment
             return { markedMonths: [], allMonths: [] };
         }
 
@@ -297,7 +298,9 @@ const markHybridDuesMonthsAsPaid = async (payment, amountPaid) => {
         });
 
         existingPaidPayments.forEach(p => {
-            if (p.months) {
+            if (p.paidMonths) {
+                paidMonths.push(...p.paidMonths);
+            } else if (p.months) {
                 paidMonths.push(...p.months);
             }
         });
@@ -305,14 +308,38 @@ const markHybridDuesMonthsAsPaid = async (payment, amountPaid) => {
         // Filter out already paid months
         const newlyPaidMonths = monthsToMark.filter(m => !paidMonths.includes(m));
 
-        // Update payment with paid months (for tracking)
-        payment.paidMonths = newlyPaidMonths;
+        // ============================================================
+        // NEW: Check if any of these months have penalties
+        // ============================================================
+        let penaltyAmount = 0;
+        let penaltyBreakdown = [];
+
+        if (payment.penaltyBreakdown && payment.penaltyBreakdown.length > 0) {
+            penaltyBreakdown = payment.penaltyBreakdown.filter(b =>
+                newlyPaidMonths.includes(b.month) && b.isLate
+            );
+            penaltyAmount = penaltyBreakdown.reduce((sum, b) => sum + b.penalty, 0);
+        }
+
+        // Update payment with paid months and penalty info
+        payment.paidMonths = [...paidMonths, ...newlyPaidMonths];
+        payment.penaltyAmount = (payment.penaltyAmount || 0) - penaltyAmount;
+
+        // Remove paid months from penalty breakdown
+        if (payment.penaltyBreakdown) {
+            payment.penaltyBreakdown = payment.penaltyBreakdown.filter(
+                b => !newlyPaidMonths.includes(b.month)
+            );
+        }
+
         await payment.save();
 
         return {
             markedMonths: newlyPaidMonths,
             allMonths: months,
-            totalPaidMonths: paidMonths.length + newlyPaidMonths.length
+            totalPaidMonths: paidMonths.length + newlyPaidMonths.length,
+            penaltyCleared: penaltyAmount,
+            penaltyBreakdown: penaltyBreakdown
         };
     } catch (error) {
         console.error('Error marking hybrid dues months:', error);
@@ -932,6 +959,13 @@ router.get('/verify/:reference', verifyLimiter, validatePaymentVerification, asy
             verificationInProgress.delete(reference);
             resolveVerification();
 
+            // const penaltyInfo = {
+            //     totalPenalty: payment.penaltyAmount || 0,
+            //     breakdown: payment.penaltyBreakdown || [],
+            //     cleared: result?.penaltyCleared || 0
+            // };
+
+
             res.status(200).json({
                 success: true,
                 data: {
@@ -946,7 +980,12 @@ router.get('/verify/:reference', verifyLimiter, validatePaymentVerification, asy
                     // ============================================================
                     months: payment.months || [],
                     paidMonths: payment.paidMonths || [],
-                    monthCount: payment.monthCount || 0
+                    monthCount: payment.monthCount || 0,
+                    // ============================================================
+                    // NEW: Penalty info
+                    // ============================================================
+                    penaltyAmount: payment.penaltyAmount || 0,
+                    penaltyBreakdown: payment.penaltyBreakdown || []
                 },
                 message: isPartialPayment ? `Partial payment of ₦${amountPaid.toLocaleString()} verified. Outstanding balance: ₦${result?.remainingTarget.toLocaleString()}` : 'Payment verified successfully'
             });
@@ -1058,6 +1097,16 @@ router.post('/webhook', webhookLimiter, async (req, res) => {
                         payment.months.length
                     );
                     const paidMonths = payment.months.slice(0, monthsCovered);
+                    // ============================================================
+                    // NEW: Check for penalties on paid months
+                    // ============================================================
+                    let penaltyCleared = 0;
+                    if (payment.penaltyBreakdown && payment.penaltyBreakdown.length > 0) {
+                        const clearedPenalties = payment.penaltyBreakdown.filter(b =>
+                            paidMonths.includes(b.month) && b.isLate
+                        );
+                        penaltyCleared = clearedPenalties.reduce((sum, b) => sum + b.penalty, 0);
+                    }
 
                     await Payment.findOneAndUpdate(
                         { _id: payment._id },
@@ -1072,12 +1121,27 @@ router.post('/webhook', webhookLimiter, async (req, res) => {
                                 isPartial: false,
                                 completedAt: new Date(),
                                 transactionReference: tx_ref,
-                                paidMonths: paidMonths
+                                paidMonths: paidMonths,
+                                penaltyAmount: Math.max(0, (payment.penaltyAmount || 0) - penaltyCleared)
                             }
                         }
                     );
-                    console.log(`✅ Webhook - HYBRID DUES payment recorded: ${paidMonths.length} months paid`);
 
+                    // Remove cleared penalties from breakdown
+                    if (payment.penaltyBreakdown && payment.penaltyBreakdown.length > 0) {
+                        const remainingPenalties = payment.penaltyBreakdown.filter(
+                            b => !paidMonths.includes(b.month)
+                        );
+                        await Payment.updateOne(
+                            { _id: payment._id },
+                            { $set: { penaltyBreakdown: remainingPenalties } }
+                        );
+                    }
+
+                    console.log(`✅ Webhook - HYBRID DUES payment recorded: ${paidMonths.length} months paid`);
+                    if (penaltyCleared > 0) {
+                        console.log(`✅ Webhook - Penalty cleared: ₦${penaltyCleared}`);
+                    }
                     // Check for remaining months
                     const remainingMonths = payment.months.filter(m => !paidMonths.includes(m));
                     if (remainingMonths.length > 0) {

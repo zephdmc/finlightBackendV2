@@ -28,6 +28,124 @@ const calculateFeesAndNet = (amountPaid) => {
     };
 };
 
+
+
+// controllers/paymentController.js - Updated helper
+
+/**
+ * Calculate late penalties for ANY payment type
+ * @param {Object} paymentType - The payment type with penalty settings
+ * @param {Date} referenceDate - The date to check against
+ * @param {Array} months - Optional months array (for dues only)
+ * @returns {Object} - { totalPenalty, breakdown, isLate }
+ */
+const calculateLatePenalties = (paymentType, referenceDate = new Date(), months = null) => {
+    // ============================================================
+    // Check if penalties are enabled
+    // ============================================================
+    if (!paymentType || !paymentType.late_penalty_enabled) {
+        return {
+            totalPenalty: 0,
+            breakdown: [],
+            isLate: false,
+            message: 'No penalties enabled'
+        };
+    }
+
+    const now = new Date(referenceDate);
+    const dueDateAfter = paymentType.due_date_after || 30;
+    const daysAfterDue = paymentType.late_penalty_days_after || 7;
+
+    // ============================================================
+    // Calculate penalty based on payment type
+    // ============================================================
+    const penaltyPercentage = paymentType.late_penalty_type === 'percentage'
+        ? paymentType.late_penalty_value / 100
+        : 0;
+    const fixedPenalty = paymentType.late_penalty_type === 'fixed'
+        ? paymentType.late_penalty_value
+        : 0;
+
+    // ============================================================
+    // For DUES: Check each month individually
+    // ============================================================
+    if (months && months.length > 0 &&
+        (paymentType.type === 'dues' || paymentType.type === 'monthly_dues')) {
+
+        const breakdown = months.map(month => {
+            const [year, monthNum] = month.split('-').map(Number);
+            const dueDate = new Date(year, monthNum - 1, 1);
+            dueDate.setDate(dueDate.getDate() + dueDateAfter);
+
+            const penaltyStartDate = new Date(dueDate);
+            penaltyStartDate.setDate(penaltyStartDate.getDate() + daysAfterDue);
+
+            const isLate = now > penaltyStartDate;
+
+            let penalty = 0;
+            if (isLate) {
+                if (paymentType.late_penalty_type === 'percentage') {
+                    penalty = paymentType.amount * penaltyPercentage;
+                } else {
+                    penalty = fixedPenalty;
+                }
+            }
+
+            return {
+                month,
+                dueDate,
+                penaltyStartDate,
+                isLate,
+                penalty: Math.round(penalty * 100) / 100
+            };
+        });
+
+        const totalPenalty = breakdown.reduce((sum, b) => sum + b.penalty, 0);
+        const isLate = breakdown.some(b => b.isLate);
+
+        return {
+            totalPenalty: Math.round(totalPenalty * 100) / 100,
+            breakdown,
+            isLate,
+            message: isLate ? 'Late penalties applied' : 'No late penalties'
+        };
+    }
+
+    // ============================================================
+    // For NON-DUES: Check single payment
+    // ============================================================
+    const createdAt = paymentType.createdAt || new Date();
+    const dueDate = new Date(createdAt);
+    dueDate.setDate(dueDate.getDate() + dueDateAfter);
+
+    const penaltyStartDate = new Date(dueDate);
+    penaltyStartDate.setDate(penaltyStartDate.getDate() + daysAfterDue);
+
+    const isLate = now > penaltyStartDate;
+
+    let penalty = 0;
+    if (isLate) {
+        if (paymentType.late_penalty_type === 'percentage') {
+            penalty = paymentType.amount * penaltyPercentage;
+        } else {
+            penalty = fixedPenalty;
+        }
+    }
+
+    return {
+        totalPenalty: Math.round(penalty * 100) / 100,
+        breakdown: [{
+            month: null,
+            dueDate,
+            penaltyStartDate,
+            isLate,
+            penalty: Math.round(penalty * 100) / 100
+        }],
+        isLate,
+        message: isLate ? 'Late penalty applied' : 'No late penalty'
+    };
+};
+
 /**
  * Get the current period key for a payment type
  * NEW: Helper for recurring billing
@@ -1178,6 +1296,217 @@ exports.getPaymentStats = async (req, res, next) => {
 // @route   POST /api/payments/member-payment
 // @access  Private
 // ============================================================
+// exports.createMemberPayment = async (req, res, next) => {
+//     console.log('🔥🔥🔥 createMemberPayment WAS CALLED! 🔥🔥🔥');
+//     console.log('Request body:', req.body);
+//     try {
+//         const {
+//             name,
+//             type,
+//             amount,
+//             description,
+//             paymentTypeId,
+//             periodStart,
+//             periodEnd,
+//             periodKey,
+//             months,           // ← NEW: Array of months
+//             monthCount,       // ← NEW: Number of months
+//             monthlyPrice      // ← NEW: Price per month
+//         } = req.body;
+//         const userId = req.user.id;
+//         const organizationId = req.user.organizationId;
+
+//         if (!name || !type || !amount || amount <= 0) {
+//             return res.status(400).json({ success: false, message: 'Missing required fields' });
+//         }
+
+//         // ============================================================
+//         // HYBRID DUES IMPLEMENTATION: Check if this is a dues payment with months
+//         // ============================================================
+//         const isDuesPayment = (type === 'dues' || type === 'monthly_dues') && months && months.length > 0;
+
+//         // If it's a dues payment with months, validate months
+//         if (isDuesPayment) {
+//             if (!months || months.length === 0) {
+//                 return res.status(400).json({
+//                     success: false,
+//                     message: 'Please select at least one month for dues payment'
+//                 });
+//             }
+//             console.log(`📅 Dues payment for months: ${months.join(', ')} (${months.length} months)`);
+//         }
+
+//         // ============================================================
+//         // NEW: If paymentTypeId is provided, get the payment type
+//         // ============================================================
+//         let paymentType = null;
+//         if (paymentTypeId) {
+//             paymentType = await PaymentType.findById(paymentTypeId);
+//         }
+
+//         // ============================================================
+//         // HYBRID: For dues, check if there's already an active payment for this user
+//         // ============================================================
+//         let existingPayment = null;
+//         if (isDuesPayment && paymentType) {
+//             // Check if user already has an active (unpaid/partial/pending) payment for this dues type
+//             existingPayment = await Payment.findOne({
+//                 user: userId,
+//                 paymentTypeId: paymentTypeId,
+//                 organizationId: organizationId,
+//                 status: { $in: ['unpaid', 'partial', 'pending'] }
+//             });
+
+//             if (existingPayment) {
+//                 // ============================================================
+//                 // EXISTING PAYMENT FOUND - ADD NEW MONTHS TO IT
+//                 // ============================================================
+//                 console.log(`📝 Adding ${months.length} month(s) to existing payment: ${existingPayment._id}`);
+
+//                 // Filter out months that are already in the payment
+//                 const existingMonths = existingPayment.months || [];
+//                 const newMonths = months.filter(m => !existingMonths.includes(m));
+
+//                 if (newMonths.length === 0) {
+//                     return res.status(400).json({
+//                         success: false,
+//                         message: 'All selected months are already in your payment. Please select different months.',
+//                         data: {
+//                             existingMonths: existingMonths,
+//                             selectedMonths: months
+//                         }
+//                     });
+//                 }
+
+//                 // Calculate new totals
+//                 const monthlyPriceFromType = paymentType.amount || amount;
+//                 const allMonths = [...existingMonths, ...newMonths];
+//                 const totalAmount = allMonths.length * monthlyPriceFromType;
+//                 const totalPayable = Math.ceil(totalAmount / 0.96);
+
+//                 // Update the payment
+//                 existingPayment.months = allMonths;
+//                 existingPayment.monthCount = allMonths.length;
+//                 existingPayment.monthlyPrice = monthlyPriceFromType;
+//                 existingPayment.amount = totalAmount;
+//                 existingPayment.targetOrgAmount = totalAmount;
+//                 existingPayment.expectedAmount = totalPayable;
+//                 existingPayment.remainingAmount = totalAmount - (existingPayment.totalPaidSoFar || 0);
+//                 existingPayment.status = 'pending';
+//                 existingPayment.description = description || `${name} - ${allMonths.join(', ')}`;
+
+//                 // Generate new transaction reference
+//                 existingPayment.transactionReference = `PAY-${existingPayment._id}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+
+//                 await existingPayment.save();
+
+//                 console.log(`✅ Payment updated with ${newMonths.length} new month(s). Total: ${allMonths.length} months`);
+
+//                 return res.status(200).json({
+//                     success: true,
+//                     data: existingPayment,
+//                     message: `Added ${newMonths.length} month(s) to your payment. Total: ${allMonths.length} months.`,
+//                     isUpdate: true,
+//                     addedMonths: newMonths,
+//                     totalMonths: allMonths.length,
+//                     previousMonths: existingMonths
+//                 });
+//             }
+//         }
+
+//         // ============================================================
+//         // NO EXISTING PAYMENT - CREATE NEW
+//         // ============================================================
+
+//         // Calculate amount and period info
+//         let finalAmount = amount;
+//         let finalTargetOrgAmount = amount;
+//         let finalExpectedAmount = Math.ceil(amount / 0.96);
+//         let finalRemainingAmount = amount;
+//         let finalMonths = [];
+//         let finalMonthCount = 0;
+//         let finalMonthlyPrice = amount;
+
+//         // If dues payment with months, calculate total
+//         if (isDuesPayment && paymentType) {
+//             finalMonthlyPrice = paymentType.amount || amount;
+//             finalMonths = months;
+//             finalMonthCount = months.length;
+//             finalAmount = months.length * finalMonthlyPrice;
+//             finalTargetOrgAmount = finalAmount;
+//             finalExpectedAmount = Math.ceil(finalAmount / 0.96);
+//             finalRemainingAmount = finalAmount;
+//         }
+
+//         // If periodKey not provided but months exist, use first month as periodKey
+//         let finalPeriodKey = periodKey;
+//         if (!finalPeriodKey && finalMonths.length > 0) {
+//             finalPeriodKey = finalMonths[0];
+//         }
+
+//         // Generate transaction reference
+//         let transactionReference = `PENDING-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+
+//         // ===== CREATE NEW PAYMENT =====
+//         const payment = await Payment.create({
+//             user: userId,
+//             name,
+//             type,
+//             amount: finalAmount,
+//             targetOrgAmount: finalTargetOrgAmount,
+//             expectedAmount: finalExpectedAmount,
+//             paidAmount: 0,
+//             remainingAmount: finalRemainingAmount,
+//             totalPaidSoFar: 0,
+//             isPartial: false,
+//             description: description || `${name} payment${finalMonths.length > 0 ? ` - ${finalMonths.join(', ')}` : ''}`,
+//             paymentTypeId: paymentTypeId || null,
+//             organizationId,
+//             status: 'pending',
+//             transactionReference: transactionReference,
+//             // NEW: Months fields for hybrid dues
+//             months: finalMonths,
+//             monthCount: finalMonthCount,
+//             monthlyPrice: finalMonthlyPrice,
+//             // Legacy period fields
+//             periodStart: periodStart || null,
+//             periodEnd: periodEnd || null,
+//             periodKey: finalPeriodKey
+//         });
+
+//         // ✅ Force save if field is missing
+//         if (!payment.transactionReference) {
+//             console.log('⚠️ transactionReference missing, forcing update...');
+//             await Payment.findByIdAndUpdate(payment._id, {
+//                 $set: { transactionReference: `PENDING-${Date.now()}-${Math.random().toString(36).substr(2, 9)}` }
+//             });
+//             const updated = await Payment.findById(payment._id);
+//             console.log(`✅ After force update: ${updated.transactionReference}`);
+//         }
+
+//         console.log(`✅ Payment created with reference: ${payment.transactionReference} type: ${payment.type} amount: ₦${payment.amount.toLocaleString()}`);
+//         console.log(`📅 Months: ${payment.months ? payment.months.join(', ') : 'N/A'}`);
+
+//         res.status(201).json({
+//             success: true,
+//             data: payment,
+//             message: isDuesPayment
+//                 ? `Payment created for ${payment.monthCount} month(s): ${payment.months.join(', ')}`
+//                 : 'Payment created successfully'
+//         });
+
+//     } catch (error) {
+//         console.error('Member payment creation error:', error);
+//         res.status(500).json({
+//             success: false,
+//             message: error.message || 'Failed to create payment'
+//         });
+//     }
+// };
+
+
+// controllers/paymentController.js - Updated createMemberPayment
+
 exports.createMemberPayment = async (req, res, next) => {
     console.log('🔥🔥🔥 createMemberPayment WAS CALLED! 🔥🔥🔥');
     console.log('Request body:', req.body);
@@ -1191,23 +1520,37 @@ exports.createMemberPayment = async (req, res, next) => {
             periodStart,
             periodEnd,
             periodKey,
-            months,           // ← NEW: Array of months
-            monthCount,       // ← NEW: Number of months
-            monthlyPrice      // ← NEW: Price per month
+            months,
+            monthCount,
+            monthlyPrice,
+            includePenalties = true
         } = req.body;
         const userId = req.user.id;
         const organizationId = req.user.organizationId;
 
+        // ============================================================
+        // VALIDATE BASIC REQUIRED FIELDS
+        // ============================================================
         if (!name || !type || !amount || amount <= 0) {
             return res.status(400).json({ success: false, message: 'Missing required fields' });
         }
 
         // ============================================================
-        // HYBRID DUES IMPLEMENTATION: Check if this is a dues payment with months
+        // GET PAYMENT TYPE
+        // ============================================================
+        let paymentType = null;
+        if (paymentTypeId) {
+            paymentType = await PaymentType.findById(paymentTypeId);
+        }
+
+        // ============================================================
+        // DETERMINE IF THIS IS A DUES PAYMENT (for month tracking)
         // ============================================================
         const isDuesPayment = (type === 'dues' || type === 'monthly_dues') && months && months.length > 0;
 
-        // If it's a dues payment with months, validate months
+        // ============================================================
+        // VALIDATE DUES PAYMENT (only if months provided)
+        // ============================================================
         if (isDuesPayment) {
             if (!months || months.length === 0) {
                 return res.status(400).json({
@@ -1219,88 +1562,30 @@ exports.createMemberPayment = async (req, res, next) => {
         }
 
         // ============================================================
-        // NEW: If paymentTypeId is provided, get the payment type
+        // CALCULATE PENALTIES FOR ALL PAYMENT TYPES
         // ============================================================
-        let paymentType = null;
-        if (paymentTypeId) {
-            paymentType = await PaymentType.findById(paymentTypeId);
-        }
+        let penaltyInfo = { totalPenalty: 0, breakdown: [], isLate: false };
 
-        // ============================================================
-        // HYBRID: For dues, check if there's already an active payment for this user
-        // ============================================================
-        let existingPayment = null;
-        if (isDuesPayment && paymentType) {
-            // Check if user already has an active (unpaid/partial/pending) payment for this dues type
-            existingPayment = await Payment.findOne({
-                user: userId,
-                paymentTypeId: paymentTypeId,
-                organizationId: organizationId,
-                status: { $in: ['unpaid', 'partial', 'pending'] }
-            });
+        if (paymentType && includePenalties) {
+            // ============================================================
+            // Pass months ONLY if this is a dues payment
+            // ============================================================
+            const penaltyMonths = isDuesPayment ? months : null;
+            penaltyInfo = calculateLatePenalties(paymentType, new Date(), penaltyMonths);
 
-            if (existingPayment) {
-                // ============================================================
-                // EXISTING PAYMENT FOUND - ADD NEW MONTHS TO IT
-                // ============================================================
-                console.log(`📝 Adding ${months.length} month(s) to existing payment: ${existingPayment._id}`);
-
-                // Filter out months that are already in the payment
-                const existingMonths = existingPayment.months || [];
-                const newMonths = months.filter(m => !existingMonths.includes(m));
-
-                if (newMonths.length === 0) {
-                    return res.status(400).json({
-                        success: false,
-                        message: 'All selected months are already in your payment. Please select different months.',
-                        data: {
-                            existingMonths: existingMonths,
-                            selectedMonths: months
-                        }
+            if (penaltyInfo.isLate) {
+                console.log(`⚠️ Late penalty applied: ₦${penaltyInfo.totalPenalty}`);
+                if (isDuesPayment && penaltyInfo.breakdown.length > 0) {
+                    penaltyInfo.breakdown.filter(b => b.isLate).forEach(b => {
+                        console.log(`   ${b.month}: ₦${b.penalty} penalty`);
                     });
                 }
-
-                // Calculate new totals
-                const monthlyPriceFromType = paymentType.amount || amount;
-                const allMonths = [...existingMonths, ...newMonths];
-                const totalAmount = allMonths.length * monthlyPriceFromType;
-                const totalPayable = Math.ceil(totalAmount / 0.96);
-
-                // Update the payment
-                existingPayment.months = allMonths;
-                existingPayment.monthCount = allMonths.length;
-                existingPayment.monthlyPrice = monthlyPriceFromType;
-                existingPayment.amount = totalAmount;
-                existingPayment.targetOrgAmount = totalAmount;
-                existingPayment.expectedAmount = totalPayable;
-                existingPayment.remainingAmount = totalAmount - (existingPayment.totalPaidSoFar || 0);
-                existingPayment.status = 'pending';
-                existingPayment.description = description || `${name} - ${allMonths.join(', ')}`;
-
-                // Generate new transaction reference
-                existingPayment.transactionReference = `PAY-${existingPayment._id}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-
-                await existingPayment.save();
-
-                console.log(`✅ Payment updated with ${newMonths.length} new month(s). Total: ${allMonths.length} months`);
-
-                return res.status(200).json({
-                    success: true,
-                    data: existingPayment,
-                    message: `Added ${newMonths.length} month(s) to your payment. Total: ${allMonths.length} months.`,
-                    isUpdate: true,
-                    addedMonths: newMonths,
-                    totalMonths: allMonths.length,
-                    previousMonths: existingMonths
-                });
             }
         }
 
         // ============================================================
-        // NO EXISTING PAYMENT - CREATE NEW
+        // CALCULATE AMOUNTS
         // ============================================================
-
-        // Calculate amount and period info
         let finalAmount = amount;
         let finalTargetOrgAmount = amount;
         let finalExpectedAmount = Math.ceil(amount / 0.96);
@@ -1308,29 +1593,111 @@ exports.createMemberPayment = async (req, res, next) => {
         let finalMonths = [];
         let finalMonthCount = 0;
         let finalMonthlyPrice = amount;
+        let finalPenaltyAmount = penaltyInfo.totalPenalty || 0;
+        let finalPenaltyBreakdown = penaltyInfo.breakdown || [];
 
-        // If dues payment with months, calculate total
         if (isDuesPayment && paymentType) {
+            // ============================================================
+            // DUES PAYMENT - Calculate with months
+            // ============================================================
             finalMonthlyPrice = paymentType.amount || amount;
             finalMonths = months;
             finalMonthCount = months.length;
-            finalAmount = months.length * finalMonthlyPrice;
-            finalTargetOrgAmount = finalAmount;
+            const baseAmount = months.length * finalMonthlyPrice;
+            finalAmount = baseAmount + finalPenaltyAmount;
+            finalTargetOrgAmount = baseAmount;
+            finalExpectedAmount = Math.ceil(finalAmount / 0.96);
+            finalRemainingAmount = finalAmount;
+        } else {
+            // ============================================================
+            // NON-DUES PAYMENT - Add penalty to base amount
+            // ============================================================
+            finalAmount = amount + finalPenaltyAmount;
+            finalTargetOrgAmount = amount;
             finalExpectedAmount = Math.ceil(finalAmount / 0.96);
             finalRemainingAmount = finalAmount;
         }
 
-        // If periodKey not provided but months exist, use first month as periodKey
-        let finalPeriodKey = periodKey;
-        if (!finalPeriodKey && finalMonths.length > 0) {
-            finalPeriodKey = finalMonths[0];
+        // ============================================================
+        // CHECK FOR EXISTING PAYMENT (ONLY FOR DUES)
+        // ============================================================
+        let existingPayment = null;
+        if (isDuesPayment && paymentType) {
+            existingPayment = await Payment.findOne({
+                user: userId,
+                paymentTypeId: paymentTypeId,
+                organizationId: organizationId,
+                status: { $in: ['unpaid', 'partial', 'pending'] }
+            });
         }
 
-        // Generate transaction reference
+        // ============================================================
+        // IF EXISTING PAYMENT FOUND - ADD MONTHS (ONLY FOR DUES)
+        // ============================================================
+        if (existingPayment) {
+            console.log(`📝 Adding ${months.length} month(s) to existing payment: ${existingPayment._id}`);
+
+            const existingMonths = existingPayment.months || [];
+            const newMonths = months.filter(m => !existingMonths.includes(m));
+
+            if (newMonths.length === 0) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'All selected months are already in your payment. Please select different months.',
+                    data: { existingMonths, selectedMonths: months }
+                });
+            }
+
+            // Calculate penalties for new months only
+            const newPenaltyInfo = calculateLatePenalties(paymentType, new Date(), newMonths);
+
+            const allMonths = [...existingMonths, ...newMonths];
+            const newBaseTotal = allMonths.length * finalMonthlyPrice;
+            const totalExistingPenalty = existingPayment.penaltyAmount || 0;
+            const newTotalWithPenalty = newBaseTotal + totalExistingPenalty + (newPenaltyInfo.totalPenalty || 0);
+            const newTotalPayable = Math.ceil(newTotalWithPenalty / 0.96);
+
+            existingPayment.months = allMonths;
+            existingPayment.monthCount = allMonths.length;
+            existingPayment.monthlyPrice = finalMonthlyPrice;
+            existingPayment.amount = newBaseTotal;
+            existingPayment.targetOrgAmount = newBaseTotal;
+            existingPayment.expectedAmount = newTotalPayable;
+            existingPayment.remainingAmount = newTotalWithPenalty - (existingPayment.totalPaidSoFar || 0);
+            existingPayment.status = 'pending';
+            existingPayment.description = description || `${name} - ${allMonths.join(', ')}`;
+            existingPayment.penaltyAmount = totalExistingPenalty + (newPenaltyInfo.totalPenalty || 0);
+            existingPayment.penaltyBreakdown = [
+                ...(existingPayment.penaltyBreakdown || []),
+                ...newPenaltyInfo.breakdown
+            ];
+            existingPayment.transactionReference = `PAY-${existingPayment._id}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+
+            await existingPayment.save();
+
+            console.log(`✅ Payment updated with ${newMonths.length} new month(s). Total: ${allMonths.length} months`);
+
+            return res.status(200).json({
+                success: true,
+                data: existingPayment,
+                message: `Added ${newMonths.length} month(s) to your payment. Total: ${allMonths.length} months.`,
+                isUpdate: true,
+                addedMonths: newMonths,
+                totalMonths: allMonths.length,
+                previousMonths: existingMonths,
+                penaltyInfo: {
+                    totalPenalty: existingPayment.penaltyAmount,
+                    breakdown: existingPayment.penaltyBreakdown
+                }
+            });
+        }
+
+        // ============================================================
+        // CREATE NEW PAYMENT - Works for ALL types
+        // ============================================================
         let transactionReference = `PENDING-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
-        // ===== CREATE NEW PAYMENT =====
-        const payment = await Payment.create({
+        const paymentData = {
             user: userId,
             name,
             type,
@@ -1346,39 +1713,59 @@ exports.createMemberPayment = async (req, res, next) => {
             organizationId,
             status: 'pending',
             transactionReference: transactionReference,
-            // NEW: Months fields for hybrid dues
+            // ============================================================
+            // HYBRID DUES FIELDS (only for dues payments)
+            // ============================================================
             months: finalMonths,
             monthCount: finalMonthCount,
             monthlyPrice: finalMonthlyPrice,
-            // Legacy period fields
+            // ============================================================
+            // PENALTY FIELDS (ALL payment types)
+            // ============================================================
+            penaltyAmount: finalPenaltyAmount,
+            penaltyBreakdown: finalPenaltyBreakdown,
+            // ============================================================
+            // LEGACY PERIOD FIELDS
+            // ============================================================
             periodStart: periodStart || null,
             periodEnd: periodEnd || null,
-            periodKey: finalPeriodKey
-        });
+            periodKey: periodKey || (finalMonths.length > 0 ? finalMonths[0] : null)
+        };
 
-        // ✅ Force save if field is missing
-        if (!payment.transactionReference) {
-            console.log('⚠️ transactionReference missing, forcing update...');
-            await Payment.findByIdAndUpdate(payment._id, {
-                $set: { transactionReference: `PENDING-${Date.now()}-${Math.random().toString(36).substr(2, 9)}` }
-            });
-            const updated = await Payment.findById(payment._id);
-            console.log(`✅ After force update: ${updated.transactionReference}`);
-        }
+        const payment = await Payment.create(paymentData);
 
-        console.log(`✅ Payment created with reference: ${payment.transactionReference} type: ${payment.type} amount: ₦${payment.amount.toLocaleString()}`);
-        console.log(`📅 Months: ${payment.months ? payment.months.join(', ') : 'N/A'}`);
+        console.log(`✅ Payment created with reference: ${payment.transactionReference}`);
+        console.log(`📝 Type: ${payment.type}`);
+        console.log(`💰 Base amount: ₦${payment.amount}`);
+        console.log(`⚠️ Penalty: ₦${payment.penaltyAmount || 0}`);
+        console.log(`💰 Total amount: ₦${payment.amount + (payment.penaltyAmount || 0)}`);
 
-        res.status(201).json({
+        // ============================================================
+        // RESPONSE
+        // ============================================================
+        const responseData = {
             success: true,
             data: payment,
-            message: isDuesPayment
-                ? `Payment created for ${payment.monthCount} month(s): ${payment.months.join(', ')}`
-                : 'Payment created successfully'
-        });
+            message: 'Payment created successfully',
+            penaltyInfo: {
+                totalPenalty: payment.penaltyAmount,
+                breakdown: payment.penaltyBreakdown,
+                isLate: penaltyInfo.isLate
+            }
+        };
+
+        if (isDuesPayment) {
+            responseData.message = `Payment created for ${payment.monthCount} month(s): ${payment.months.join(', ')}`;
+        }
+
+        if (payment.penaltyAmount > 0) {
+            responseData.message += ` (Includes ₦${payment.penaltyAmount} late penalty)`;
+        }
+
+        res.status(201).json(responseData);
 
     } catch (error) {
-        console.error('Member payment creation error:', error);
+        console.error('❌ Member payment creation error:', error);
         res.status(500).json({
             success: false,
             message: error.message || 'Failed to create payment'
@@ -1386,7 +1773,7 @@ exports.createMemberPayment = async (req, res, next) => {
     }
 };
 
-// ============================================================
+// =========================
 // NEW: Get dues summary for a member (Hybrid approach)
 // @route   GET /api/payments/dues-summary
 // @access  Private

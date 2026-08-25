@@ -47,6 +47,49 @@ const paymentSchema = new mongoose.Schema({
     comment: 'Price per month (from PaymentType)'
   },
 
+  // ============================================================
+  // PAID MONTHS - Track which months are actually paid
+  // ============================================================
+  paidMonths: {
+    type: [String],
+    default: [],
+    index: true,
+    comment: 'Months that have been paid (e.g., ["2026-01", "2026-02"])'
+  },
+
+  // ============================================================
+  // LATE PENALTY FIELDS
+  // ============================================================
+  penaltyAmount: {
+    type: Number,
+    default: 0,
+    comment: 'Total late penalty amount applied to this payment'
+  },
+  penaltyBreakdown: [{
+    month: {
+      type: String,
+      comment: 'Month key (e.g., "2026-01") - null for non-dues payments'
+    },
+    penalty: {
+      type: Number,
+      default: 0,
+      comment: 'Penalty amount for this month'
+    },
+    isLate: {
+      type: Boolean,
+      default: false,
+      comment: 'Whether this month incurred a penalty'
+    },
+    dueDate: {
+      type: Date,
+      comment: 'The due date for this month'
+    },
+    penaltyStartDate: {
+      type: Date,
+      comment: 'When the penalty started applying'
+    }
+  }],
+
   // ==================== BILLING PERIOD FIELDS (Legacy Support) ====================
   periodStart: {
     type: Date,
@@ -131,6 +174,24 @@ const paymentSchema = new mongoose.Schema({
     transactionReference: {
       type: String,
       comment: 'Transaction reference for this partial payment'
+    },
+    // ============================================================
+    // NEW: Track months covered by this partial payment
+    // ============================================================
+    monthsPaid: {
+      type: [String],
+      default: [],
+      comment: 'Months covered by this partial payment'
+    },
+    monthsCovered: {
+      type: Number,
+      default: 0,
+      comment: 'Number of months covered by this partial payment'
+    },
+    remainingMonths: {
+      type: [String],
+      default: [],
+      comment: 'Months remaining after this partial payment'
     },
     fees: {
       flutterwaveFee: {
@@ -241,12 +302,21 @@ paymentSchema.index({ organizationId: 1, user: 1, status: 1, remainingAmount: 1 
 // Payment type queries
 paymentSchema.index({ organizationId: 1, paymentTypeId: 1 });
 
-// ============================================================
-// NEW: Months array indexes for fast queries
-// ============================================================
+// Months array indexes for fast queries
 paymentSchema.index({ organizationId: 1, months: 1 });
 paymentSchema.index({ organizationId: 1, user: 1, months: 1 });
 paymentSchema.index({ organizationId: 1, paymentTypeId: 1, months: 1 });
+
+// ============================================================
+// NEW: Paid months indexes
+// ============================================================
+paymentSchema.index({ organizationId: 1, paidMonths: 1 });
+paymentSchema.index({ organizationId: 1, user: 1, paidMonths: 1 });
+
+// ============================================================
+// NEW: Penalty indexes
+// ============================================================
+paymentSchema.index({ organizationId: 1, penaltyAmount: 1 });
 
 // Period-based queries (legacy support)
 paymentSchema.index({ organizationId: 1, periodKey: 1, status: 1 });
@@ -379,27 +449,38 @@ paymentSchema.virtual('isPeriodPayment').get(function () {
 });
 
 // ============================================================
-// NEW: Virtual to get months that are NOT paid (for partial)
+// NEW: Virtual to get months that are NOT paid
 // ============================================================
 paymentSchema.virtual('unpaidMonths').get(function () {
-  // This is a placeholder - actual unpaid months tracking
-  // would require a separate model or field
-  return [];
+  if (!this.months || this.months.length === 0) return [];
+  const paid = this.paidMonths || [];
+  return this.months.filter(m => !paid.includes(m));
+});
+
+// ============================================================
+// NEW: Virtual to get paid month count
+// ============================================================
+paymentSchema.virtual('paidMonthCount').get(function () {
+  return (this.paidMonths || []).length;
+});
+
+// ============================================================
+// NEW: Virtual to get total with penalty
+// ============================================================
+paymentSchema.virtual('totalWithPenalty').get(function () {
+  return (this.amount || 0) + (this.penaltyAmount || 0);
 });
 
 // ==================== INSTANCE METHODS ====================
 
 /**
  * Generate a period key from periodStart and frequency
- * Examples: "2026-08", "2026-W34", "2026-Q3"
  */
 paymentSchema.methods.generatePeriodKey = function () {
   if (!this.periodStart) return null;
-
   const date = new Date(this.periodStart);
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, '0');
-
   return `${year}-${month}`;
 };
 
@@ -415,19 +496,42 @@ paymentSchema.methods.belongsToPeriod = function (periodKey) {
 };
 
 /**
- * Check if this payment is for the current period
+ * Check if a specific month is paid
+ */
+paymentSchema.methods.isMonthPaid = function (monthKey) {
+  if (!this.paidMonths) return false;
+  return this.paidMonths.includes(monthKey);
+};
+
+/**
+ * Check if a specific month has a penalty
+ */
+paymentSchema.methods.hasMonthPenalty = function (monthKey) {
+  if (!this.penaltyBreakdown) return false;
+  return this.penaltyBreakdown.some(b => b.month === monthKey && b.isLate);
+};
+
+/**
+ * Get penalty for a specific month
+ */
+paymentSchema.methods.getMonthPenalty = function (monthKey) {
+  if (!this.penaltyBreakdown) return 0;
+  const found = this.penaltyBreakdown.find(b => b.month === monthKey);
+  return found ? found.penalty : 0;
+};
+
+/**
+ * Check if payment is for the current period
  */
 paymentSchema.methods.isCurrentPeriod = function () {
   if (!this.periodStart) return false;
-
   const now = new Date();
   const currentPeriodStart = new Date(now.getFullYear(), now.getMonth(), 1);
-
   return this.periodStart >= currentPeriodStart;
 };
 
 /**
- * Add partial payment (existing method - keep as is)
+ * Add partial payment (updated with month tracking)
  */
 paymentSchema.methods.addPartialPayment = function (partialData) {
   this.partialPayments = this.partialPayments || [];
@@ -436,6 +540,9 @@ paymentSchema.methods.addPartialPayment = function (partialData) {
     netToOrg: partialData.netToOrg,
     date: partialData.date || new Date(),
     transactionReference: partialData.transactionReference,
+    monthsPaid: partialData.monthsPaid || [],
+    monthsCovered: partialData.monthsCovered || 0,
+    remainingMonths: partialData.remainingMonths || [],
     fees: partialData.fees || {
       flutterwaveFee: 0,
       platformFee: 0,
@@ -470,15 +577,15 @@ paymentSchema.methods.getOutstandingRecord = async function () {
 };
 
 /**
- * Check if payment is payable (existing method - keep as is)
+ * Check if payment is payable
  */
 paymentSchema.methods.isPayable = function () {
   return this.status !== 'paid' && (this.remainingAmount > 0);
 };
 
-// ============================================================
-// NEW: Add months to this payment (for batch updates)
-// ============================================================
+/**
+ * Add months to this payment (for batch updates)
+ */
 paymentSchema.methods.addMonths = function (newMonths) {
   const existingMonths = this.months || [];
   const uniqueNewMonths = newMonths.filter(m => !existingMonths.includes(m));
@@ -498,10 +605,39 @@ paymentSchema.methods.addMonths = function (newMonths) {
   return { added: uniqueNewMonths.length, total: this.months.length };
 };
 
+/**
+ * Mark months as paid
+ */
+paymentSchema.methods.markMonthsAsPaid = function (monthsToMark) {
+  const existingPaid = this.paidMonths || [];
+  const newPaid = monthsToMark.filter(m => !existingPaid.includes(m) && this.months.includes(m));
+
+  if (newPaid.length === 0) {
+    return { marked: 0, total: existingPaid.length };
+  }
+
+  this.paidMonths = [...existingPaid, ...newPaid];
+  this.paidMonthCount = this.paidMonths.length;
+
+  // Check if all months are paid
+  if (this.paidMonths.length === this.months.length) {
+    this.status = 'paid';
+    this.isPartial = false;
+    this.remainingAmount = 0;
+    this.paidAt = new Date();
+  } else {
+    this.status = 'partial';
+    this.isPartial = true;
+    this.remainingAmount = (this.months.length - this.paidMonths.length) * this.monthlyPrice;
+  }
+
+  return { marked: newPaid.length, total: this.paidMonths.length };
+};
+
 // ==================== STATIC METHODS ====================
 
 /**
- * Find outstanding payments by user (updated to support period filtering)
+ * Find outstanding payments by user
  */
 paymentSchema.statics.findOutstandingByUser = function (userId, organizationId, options = {}) {
   const query = {
@@ -528,7 +664,7 @@ paymentSchema.statics.findOutstandingByUser = function (userId, organizationId, 
 };
 
 /**
- * Get total outstanding by user (updated with period support)
+ * Get total outstanding by user
  */
 paymentSchema.statics.getTotalOutstandingByUser = async function (userId, organizationId, options = {}) {
   const match = {
@@ -556,7 +692,7 @@ paymentSchema.statics.getTotalOutstandingByUser = async function (userId, organi
 };
 
 /**
- * Find partial payments by user (existing - keep as is)
+ * Find partial payments by user
  */
 paymentSchema.statics.findPartialPaymentsByUser = function (userId, organizationId) {
   return this.find({
@@ -569,7 +705,6 @@ paymentSchema.statics.findPartialPaymentsByUser = function (userId, organization
 
 /**
  * Find payments for a specific period and payment type
- * Used by the billing scheduler to check if a payment already exists
  */
 paymentSchema.statics.findPeriodPayment = function (organizationId, userId, paymentTypeId, periodKey) {
   return this.findOne({
@@ -582,8 +717,7 @@ paymentSchema.statics.findPeriodPayment = function (organizationId, userId, paym
 };
 
 /**
- * Find or create a period payment (upsert pattern)
- * Used by the billing scheduler
+ * Find or create a period payment
  */
 paymentSchema.statics.findOrCreatePeriodPayment = async function (data) {
   const {
@@ -677,9 +811,9 @@ paymentSchema.statics.getPaymentHistoryByPeriod = function (userId, organization
   ]);
 };
 
-// ============================================================
-// NEW: Get dues summary for a user (all payments combined)
-// ============================================================
+/**
+ * Get dues summary for a user
+ */
 paymentSchema.statics.getDuesSummary = async function (userId, organizationId) {
   const payments = await this.find({
     user: userId,
@@ -692,11 +826,10 @@ paymentSchema.statics.getDuesSummary = async function (userId, organizationId) {
 
   payments.forEach(p => {
     if (p.months && p.months.length > 0) {
-      if (p.status === 'paid') {
-        paidMonths.push(...p.months);
-      } else {
-        unpaidMonths.push(...p.months);
-      }
+      const paid = p.paidMonths || [];
+      const unpaid = p.months.filter(m => !paid.includes(m));
+      paidMonths.push(...paid);
+      unpaidMonths.push(...unpaid);
     }
   });
 
@@ -707,6 +840,7 @@ paymentSchema.statics.getDuesSummary = async function (userId, organizationId) {
     totalUnpaidMonths: unpaidMonths.length,
     totalAmount: payments.reduce((sum, p) => sum + (p.amount || 0), 0),
     totalPaid: payments.filter(p => p.status === 'paid').reduce((sum, p) => sum + (p.amount || 0), 0),
+    totalPenalty: payments.reduce((sum, p) => sum + (p.penaltyAmount || 0), 0),
     payments: payments
   };
 };
