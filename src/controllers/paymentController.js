@@ -176,6 +176,25 @@ const getCurrentPeriodDates = (paymentType, referenceDate = new Date()) => {
  * – Creates Expenditure records for fees
  */
 const handlePartialPayment = async (originalPayment, amountPaid, reference, notes = '') => {
+
+
+    // ============================================================
+    // ⭐ STRICT CHECK: Prevent partial payments for dues
+    // ============================================================
+    const isDuesPayment = (originalPayment.type === 'dues' || originalPayment.type === 'monthly_dues')
+        && originalPayment.months && originalPayment.months.length > 0;
+
+    if (isDuesPayment) {
+        // Check if this is a FULL payment
+        const totalExpected = (originalPayment.amount || 0) + (originalPayment.penaltyAmount || 0);
+        const totalPayable = Math.ceil(totalExpected / 0.96);
+
+        if (amountPaid < totalPayable - 1) {
+            throw new Error(`Partial payments are not allowed for dues. Expected amount: ₦${totalPayable}`);
+        }
+    }
+
+
     const targetAmount = originalPayment.targetOrgAmount || originalPayment.amount;
 
     // Calculate cumulative net received by organisation from all previous partial payments
@@ -1507,6 +1526,274 @@ exports.getPaymentStats = async (req, res, next) => {
 
 // controllers/paymentController.js - Updated createMemberPayment
 
+// exports.createMemberPayment = async (req, res, next) => {
+//     console.log('🔥🔥🔥 createMemberPayment WAS CALLED! 🔥🔥🔥');
+//     console.log('Request body:', req.body);
+//     try {
+//         const {
+//             name,
+//             type,
+//             amount,
+//             description,
+//             paymentTypeId,
+//             periodStart,
+//             periodEnd,
+//             periodKey,
+//             months,
+//             monthCount,
+//             monthlyPrice,
+//             includePenalties = true
+//         } = req.body;
+//         const userId = req.user.id;
+//         const organizationId = req.user.organizationId;
+
+//         // ============================================================
+//         // VALIDATE BASIC REQUIRED FIELDS
+//         // ============================================================
+//         if (!name || !type || !amount || amount <= 0) {
+//             return res.status(400).json({ success: false, message: 'Missing required fields' });
+//         }
+
+//         // ============================================================
+//         // GET PAYMENT TYPE
+//         // ============================================================
+//         let paymentType = null;
+//         if (paymentTypeId) {
+//             paymentType = await PaymentType.findById(paymentTypeId);
+//         }
+
+//         // ============================================================
+//         // DETERMINE IF THIS IS A DUES PAYMENT (for month tracking)
+//         // ============================================================
+//         const isDuesPayment = (type === 'dues' || type === 'monthly_dues') && months && months.length > 0;
+
+//         // ============================================================
+//         // VALIDATE DUES PAYMENT (only if months provided)
+//         // ============================================================
+//         if (isDuesPayment) {
+//             if (!months || months.length === 0) {
+//                 return res.status(400).json({
+//                     success: false,
+//                     message: 'Please select at least one month for dues payment'
+//                 });
+//             }
+//             console.log(`📅 Dues payment for months: ${months.join(', ')} (${months.length} months)`);
+//         }
+
+//         // ============================================================
+//         // CALCULATE PENALTIES FOR ALL PAYMENT TYPES
+//         // ============================================================
+//         let penaltyInfo = { totalPenalty: 0, breakdown: [], isLate: false };
+
+//         if (paymentType && includePenalties) {
+//             // ============================================================
+//             // Pass months ONLY if this is a dues payment
+//             // ============================================================
+//             const penaltyMonths = isDuesPayment ? months : null;
+//             penaltyInfo = calculateLatePenalties(paymentType, new Date(), penaltyMonths);
+
+//             if (penaltyInfo.isLate) {
+//                 console.log(`⚠️ Late penalty applied: ₦${penaltyInfo.totalPenalty}`);
+//                 if (isDuesPayment && penaltyInfo.breakdown.length > 0) {
+//                     penaltyInfo.breakdown.filter(b => b.isLate).forEach(b => {
+//                         console.log(`   ${b.month}: ₦${b.penalty} penalty`);
+//                     });
+//                 }
+//             }
+//         }
+
+//         // ============================================================
+//         // CALCULATE AMOUNTS
+//         // ============================================================
+//         let finalAmount = amount;
+//         let finalTargetOrgAmount = amount;
+//         let finalExpectedAmount = Math.ceil(amount / 0.96);
+//         let finalRemainingAmount = amount;
+//         let finalMonths = [];
+//         let finalMonthCount = 0;
+//         let finalMonthlyPrice = amount;
+//         let finalPenaltyAmount = penaltyInfo.totalPenalty || 0;
+//         let finalPenaltyBreakdown = penaltyInfo.breakdown || [];
+
+//         if (isDuesPayment && paymentType) {
+//             // ============================================================
+//             // DUES PAYMENT - Calculate with months
+//             // ============================================================
+//             finalMonthlyPrice = paymentType.amount || amount;
+//             finalMonths = months;
+//             finalMonthCount = months.length;
+//             const baseAmount = months.length * finalMonthlyPrice;
+//             finalAmount = baseAmount + finalPenaltyAmount;
+//             finalTargetOrgAmount = baseAmount;
+//             finalExpectedAmount = Math.ceil(finalAmount / 0.96);
+//             finalRemainingAmount = finalAmount;
+//         } else {
+//             // ============================================================
+//             // NON-DUES PAYMENT - Add penalty to base amount
+//             // ============================================================
+//             finalAmount = amount + finalPenaltyAmount;
+//             finalTargetOrgAmount = amount;
+//             finalExpectedAmount = Math.ceil(finalAmount / 0.96);
+//             finalRemainingAmount = finalAmount;
+//         }
+
+//         // ============================================================
+//         // CHECK FOR EXISTING PAYMENT (ONLY FOR DUES)
+//         // ============================================================
+//         let existingPayment = null;
+//         if (isDuesPayment && paymentType) {
+//             existingPayment = await Payment.findOne({
+//                 user: userId,
+//                 paymentTypeId: paymentTypeId,
+//                 organizationId: organizationId,
+//                 status: { $in: ['unpaid', 'partial', 'pending'] }
+//             });
+//         }
+
+//         // ============================================================
+//         // IF EXISTING PAYMENT FOUND - ADD MONTHS (ONLY FOR DUES)
+//         // ============================================================
+//         if (existingPayment) {
+//             console.log(`📝 Adding ${months.length} month(s) to existing payment: ${existingPayment._id}`);
+
+//             const existingMonths = existingPayment.months || [];
+//             const newMonths = months.filter(m => !existingMonths.includes(m));
+
+//             if (newMonths.length === 0) {
+//                 return res.status(400).json({
+//                     success: false,
+//                     message: 'All selected months are already in your payment. Please select different months.',
+//                     data: { existingMonths, selectedMonths: months }
+//                 });
+//             }
+
+//             // Calculate penalties for new months only
+//             const newPenaltyInfo = calculateLatePenalties(paymentType, new Date(), newMonths);
+
+//             const allMonths = [...existingMonths, ...newMonths];
+//             const newBaseTotal = allMonths.length * finalMonthlyPrice;
+//             const totalExistingPenalty = existingPayment.penaltyAmount || 0;
+//             const newTotalWithPenalty = newBaseTotal + totalExistingPenalty + (newPenaltyInfo.totalPenalty || 0);
+//             const newTotalPayable = Math.ceil(newTotalWithPenalty / 0.96);
+
+//             existingPayment.months = allMonths;
+//             existingPayment.monthCount = allMonths.length;
+//             existingPayment.monthlyPrice = finalMonthlyPrice;
+//             existingPayment.amount = newBaseTotal;
+//             existingPayment.targetOrgAmount = newBaseTotal;
+//             existingPayment.expectedAmount = newTotalPayable;
+//             existingPayment.remainingAmount = newTotalWithPenalty - (existingPayment.totalPaidSoFar || 0);
+//             existingPayment.status = 'pending';
+//             existingPayment.description = description || `${name} - ${allMonths.join(', ')}`;
+//             existingPayment.penaltyAmount = totalExistingPenalty + (newPenaltyInfo.totalPenalty || 0);
+//             existingPayment.penaltyBreakdown = [
+//                 ...(existingPayment.penaltyBreakdown || []),
+//                 ...newPenaltyInfo.breakdown
+//             ];
+//             existingPayment.transactionReference = `PAY-${existingPayment._id}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+
+//             await existingPayment.save();
+
+//             console.log(`✅ Payment updated with ${newMonths.length} new month(s). Total: ${allMonths.length} months`);
+
+//             return res.status(200).json({
+//                 success: true,
+//                 data: existingPayment,
+//                 message: `Added ${newMonths.length} month(s) to your payment. Total: ${allMonths.length} months.`,
+//                 isUpdate: true,
+//                 addedMonths: newMonths,
+//                 totalMonths: allMonths.length,
+//                 previousMonths: existingMonths,
+//                 penaltyInfo: {
+//                     totalPenalty: existingPayment.penaltyAmount,
+//                     breakdown: existingPayment.penaltyBreakdown
+//                 }
+//             });
+//         }
+
+//         // ============================================================
+//         // CREATE NEW PAYMENT - Works for ALL types
+//         // ============================================================
+//         let transactionReference = `PENDING-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+
+//         const paymentData = {
+//             user: userId,
+//             name,
+//             type,
+//             amount: finalAmount,
+//             targetOrgAmount: finalTargetOrgAmount,
+//             expectedAmount: finalExpectedAmount,
+//             paidAmount: 0,
+//             remainingAmount: finalRemainingAmount,
+//             totalPaidSoFar: 0,
+//             isPartial: false,
+//             description: description || `${name} payment${finalMonths.length > 0 ? ` - ${finalMonths.join(', ')}` : ''}`,
+//             paymentTypeId: paymentTypeId || null,
+//             organizationId,
+//             status: 'pending',
+//             transactionReference: transactionReference,
+//             // ============================================================
+//             // HYBRID DUES FIELDS (only for dues payments)
+//             // ============================================================
+//             months: finalMonths,
+//             monthCount: finalMonthCount,
+//             monthlyPrice: finalMonthlyPrice,
+//             // ============================================================
+//             // PENALTY FIELDS (ALL payment types)
+//             // ============================================================
+//             penaltyAmount: finalPenaltyAmount,
+//             penaltyBreakdown: finalPenaltyBreakdown,
+//             // ============================================================
+//             // LEGACY PERIOD FIELDS
+//             // ============================================================
+//             periodStart: periodStart || null,
+//             periodEnd: periodEnd || null,
+//             periodKey: periodKey || (finalMonths.length > 0 ? finalMonths[0] : null)
+//         };
+
+//         const payment = await Payment.create(paymentData);
+
+//         console.log(`✅ Payment created with reference: ${payment.transactionReference}`);
+//         console.log(`📝 Type: ${payment.type}`);
+//         console.log(`💰 Base amount: ₦${payment.amount}`);
+//         console.log(`⚠️ Penalty: ₦${payment.penaltyAmount || 0}`);
+//         console.log(`💰 Total amount: ₦${payment.amount + (payment.penaltyAmount || 0)}`);
+
+//         // ============================================================
+//         // RESPONSE
+//         // ============================================================
+//         const responseData = {
+//             success: true,
+//             data: payment,
+//             message: 'Payment created successfully',
+//             penaltyInfo: {
+//                 totalPenalty: payment.penaltyAmount,
+//                 breakdown: payment.penaltyBreakdown,
+//                 isLate: penaltyInfo.isLate
+//             }
+//         };
+
+//         if (isDuesPayment) {
+//             responseData.message = `Payment created for ${payment.monthCount} month(s): ${payment.months.join(', ')}`;
+//         }
+
+//         if (payment.penaltyAmount > 0) {
+//             responseData.message += ` (Includes ₦${payment.penaltyAmount} late penalty)`;
+//         }
+
+//         res.status(201).json(responseData);
+
+//     } catch (error) {
+//         console.error('❌ Member payment creation error:', error);
+//         res.status(500).json({
+//             success: false,
+//             message: error.message || 'Failed to create payment'
+//         });
+//     }
+// };
+
+// controllers/paymentController.js - Updated createMemberPayment with Strict Full Payment
+
 exports.createMemberPayment = async (req, res, next) => {
     console.log('🔥🔥🔥 createMemberPayment WAS CALLED! 🔥🔥🔥');
     console.log('Request body:', req.body);
@@ -1523,7 +1810,8 @@ exports.createMemberPayment = async (req, res, next) => {
             months,
             monthCount,
             monthlyPrice,
-            includePenalties = true
+            includePenalties = true,
+            customAmount  // ← ADD THIS: For frontend custom amount
         } = req.body;
         const userId = req.user.id;
         const organizationId = req.user.organizationId;
@@ -1567,9 +1855,6 @@ exports.createMemberPayment = async (req, res, next) => {
         let penaltyInfo = { totalPenalty: 0, breakdown: [], isLate: false };
 
         if (paymentType && includePenalties) {
-            // ============================================================
-            // Pass months ONLY if this is a dues payment
-            // ============================================================
             const penaltyMonths = isDuesPayment ? months : null;
             penaltyInfo = calculateLatePenalties(paymentType, new Date(), penaltyMonths);
 
@@ -1604,10 +1889,29 @@ exports.createMemberPayment = async (req, res, next) => {
             finalMonths = months;
             finalMonthCount = months.length;
             const baseAmount = months.length * finalMonthlyPrice;
-            finalAmount = baseAmount + finalPenaltyAmount;
-            finalTargetOrgAmount = baseAmount;
-            finalExpectedAmount = Math.ceil(finalAmount / 0.96);
+            finalAmount = baseAmount + finalPenaltyAmount;  // ← Base + Penalty
+            finalTargetOrgAmount = baseAmount;              // ← Org only gets base
+            finalExpectedAmount = Math.ceil(finalAmount / 0.96);  // ← With fees
             finalRemainingAmount = finalAmount;
+
+            // ============================================================
+            // ⭐ STRICT CHECK: For dues, customAmount must equal expected amount
+            // ============================================================
+            if (customAmount) {
+                const customAmountNum = parseFloat(customAmount);
+                // Allow 1 NGN tolerance for rounding
+                if (customAmountNum < finalExpectedAmount - 1) {
+                    return res.status(400).json({
+                        success: false,
+                        message: `Partial payments are not allowed for dues. The full amount of ₦${finalExpectedAmount} is required.`,
+                        expectedAmount: finalExpectedAmount,
+                        providedAmount: customAmountNum,
+                        baseAmount: baseAmount,
+                        penaltyAmount: finalPenaltyAmount
+                    });
+                }
+            }
+
         } else {
             // ============================================================
             // NON-DUES PAYMENT - Add penalty to base amount
@@ -1657,6 +1961,19 @@ exports.createMemberPayment = async (req, res, next) => {
             const newTotalWithPenalty = newBaseTotal + totalExistingPenalty + (newPenaltyInfo.totalPenalty || 0);
             const newTotalPayable = Math.ceil(newTotalWithPenalty / 0.96);
 
+            // ⭐ STRICT CHECK: For existing payment update, check customAmount
+            if (customAmount) {
+                const customAmountNum = parseFloat(customAmount);
+                if (customAmountNum < newTotalPayable - 1) {
+                    return res.status(400).json({
+                        success: false,
+                        message: `Partial payments are not allowed for dues. The full amount of ₦${newTotalPayable} is required.`,
+                        expectedAmount: newTotalPayable,
+                        providedAmount: customAmountNum
+                    });
+                }
+            }
+
             existingPayment.months = allMonths;
             existingPayment.monthCount = allMonths.length;
             existingPayment.monthlyPrice = finalMonthlyPrice;
@@ -1676,6 +1993,7 @@ exports.createMemberPayment = async (req, res, next) => {
             await existingPayment.save();
 
             console.log(`✅ Payment updated with ${newMonths.length} new month(s). Total: ${allMonths.length} months`);
+            console.log(`💰 Expected amount: ₦${existingPayment.expectedAmount}`);
 
             return res.status(200).json({
                 success: true,
@@ -1685,6 +2003,7 @@ exports.createMemberPayment = async (req, res, next) => {
                 addedMonths: newMonths,
                 totalMonths: allMonths.length,
                 previousMonths: existingMonths,
+                expectedAmount: existingPayment.expectedAmount,
                 penaltyInfo: {
                     totalPenalty: existingPayment.penaltyAmount,
                     breakdown: existingPayment.penaltyBreakdown
@@ -1701,7 +2020,7 @@ exports.createMemberPayment = async (req, res, next) => {
             user: userId,
             name,
             type,
-            amount: finalAmount,
+            amount: finalTargetOrgAmount,  // ← Store base amount (org gets this)
             targetOrgAmount: finalTargetOrgAmount,
             expectedAmount: finalExpectedAmount,
             paidAmount: 0,
@@ -1739,6 +2058,7 @@ exports.createMemberPayment = async (req, res, next) => {
         console.log(`💰 Base amount: ₦${payment.amount}`);
         console.log(`⚠️ Penalty: ₦${payment.penaltyAmount || 0}`);
         console.log(`💰 Total amount: ₦${payment.amount + (payment.penaltyAmount || 0)}`);
+        console.log(`💰 Expected amount (with fees): ₦${payment.expectedAmount}`);
 
         // ============================================================
         // RESPONSE
@@ -1747,6 +2067,9 @@ exports.createMemberPayment = async (req, res, next) => {
             success: true,
             data: payment,
             message: 'Payment created successfully',
+            expectedAmount: payment.expectedAmount,
+            baseAmount: payment.amount,
+            penaltyAmount: payment.penaltyAmount,
             penaltyInfo: {
                 totalPenalty: payment.penaltyAmount,
                 breakdown: payment.penaltyBreakdown,
@@ -2132,7 +2455,25 @@ exports.recordPartialPayment = async (req, res, next) => {
         if (originalPayment.status === 'paid') {
             return res.status(400).json({ success: false, message: 'Payment already completed' });
         }
+        // ============================================================
+        // ⭐ STRICT CHECK: Prevent partial payments for dues
+        // ============================================================
+        const isDuesPayment = (originalPayment.type === 'dues' || originalPayment.type === 'monthly_dues')
+            && originalPayment.months && originalPayment.months.length > 0;
 
+        if (isDuesPayment) {
+            const totalExpected = (originalPayment.amount || 0) + (originalPayment.penaltyAmount || 0);
+            const totalPayable = Math.ceil(totalExpected / 0.96);
+
+            if (amountPaid < totalPayable - 1) {
+                return res.status(400).json({
+                    success: false,
+                    message: `Partial payments are not allowed for dues. Expected amount: ₦${totalPayable}`,
+                    expectedAmount: totalPayable,
+                    paidAmount: amountPaid
+                });
+            }
+        }
         if (!amountPaid || amountPaid <= 0) {
             return res.status(400).json({ success: false, message: 'Valid amount is required' });
         }

@@ -244,6 +244,61 @@ const calculateMemberPayAmount = (targetOrganizationAmount) => {
     return memberPays;
 };
 
+// ============================================================
+// NEW: Calculate late penalties for months
+// ============================================================
+const calculateLatePenaltiesForMonths = (months, paymentType, referenceDate = new Date()) => {
+    if (!paymentType || !paymentType.late_penalty_enabled) {
+        return { totalPenalty: 0, breakdown: [], isLate: false };
+    }
+
+    const now = new Date(referenceDate);
+    const penaltyPercentage = paymentType.late_penalty_type === 'percentage'
+        ? paymentType.late_penalty_value / 100
+        : 0;
+    const fixedPenalty = paymentType.late_penalty_type === 'fixed'
+        ? paymentType.late_penalty_value
+        : 0;
+    const daysAfterDue = paymentType.late_penalty_days_after || 7;
+    const dueDateAfter = paymentType.due_date_after || 30;
+
+    const breakdown = months.map(month => {
+        const [year, monthNum] = month.split('-').map(Number);
+        const dueDate = new Date(year, monthNum - 1, 1);
+        dueDate.setDate(dueDate.getDate() + dueDateAfter);
+
+        const penaltyStartDate = new Date(dueDate);
+        penaltyStartDate.setDate(penaltyStartDate.getDate() + daysAfterDue);
+
+        const isLate = now > penaltyStartDate;
+
+        let penalty = 0;
+        if (isLate) {
+            if (paymentType.late_penalty_type === 'percentage') {
+                penalty = paymentType.amount * penaltyPercentage;
+            } else {
+                penalty = fixedPenalty;
+            }
+        }
+
+        return {
+            month,
+            dueDate,
+            penaltyStartDate,
+            isLate,
+            penalty: Math.round(penalty * 100) / 100
+        };
+    });
+
+    const totalPenalty = breakdown.reduce((sum, b) => sum + b.penalty, 0);
+
+    return {
+        totalPenalty: Math.round(totalPenalty * 100) / 100,
+        breakdown,
+        isLate: breakdown.some(b => b.isLate)
+    };
+};
+
 const calculateNetToOrganization = (amountPaid, targetOrgAmount = null) => {
     let flutterwaveFee = amountPaid * 0.02;
     let platformFee = amountPaid * 0.02;
@@ -840,7 +895,8 @@ router.get('/verify/:reference', verifyLimiter, validatePaymentVerification, asy
         if (response.status === 'success' && response.data && response.data.status === 'successful') {
             const amountPaid = response.data.amount || response.data.charged_amount || 0;
             const targetAmount = payment.targetOrgAmount || payment.amount;
-
+            const expectedAmount = payment.expectedAmount || targetAmount;
+            const isFullPayment = amountPaid >= expectedAmount - 1; // Allow 1 NGN tolerance
             const isPartialPayment = amountPaid < targetAmount;
 
             console.log(`💰 Amount paid: ₦${amountPaid}, Target: ₦${targetAmount}, Is Partial: ${isPartialPayment}`);
@@ -850,83 +906,105 @@ router.get('/verify/:reference', verifyLimiter, validatePaymentVerification, asy
             // ============================================================
             // HYBRID DUES: Check if this is a dues payment with months
             // ============================================================
+            // ============================================================
+            // HYBRID DUES: Strict full payment only - NO PARTIAL PAYMENTS
+            // ============================================================
             const isHybridDues = (payment.months && payment.months.length > 0) &&
                 (payment.type === 'dues' || payment.type === 'monthly_dues');
 
             if (isHybridDues) {
-                console.log(`📅 HYBRID DUES PAYMENT: ${payment.months.length} months, amount: ₦${payment.amount}`);
+                console.log(`📅 HYBRID DUES PAYMENT: ${payment.months.length} months`);
 
-                // Calculate how many months are covered by this payment
+                // Calculate expected amounts
                 const monthlyPrice = payment.monthlyPrice || (payment.amount / payment.months.length);
-                const monthsCovered = Math.min(
-                    Math.floor(amountPaid / monthlyPrice),
-                    payment.months.length
-                );
+                const totalPenalty = payment.penaltyAmount || 0;
+                const totalExpected = payment.amount + totalPenalty;
+                const totalPayable = Math.ceil(totalExpected / 0.96);
 
-                const paidMonths = payment.months.slice(0, monthsCovered);
-
-                console.log(`📅 Months covered: ${monthsCovered}/${payment.months.length}`);
-                console.log(`📅 Paid months: ${paidMonths.join(', ')}`);
-
-                // Mark payment as paid and store paid months
-                const updatedPayment = await Payment.findOneAndUpdate(
-                    { _id: payment._id },
-                    {
-                        $set: {
-                            status: 'paid',
-                            paidAt: new Date(),
-                            actualAmountPaid: amountPaid,
-                            netToOrganization: payment.targetOrgAmount || payment.amount,
-                            totalPaidSoFar: amountPaid,
-                            remainingAmount: 0,
-                            isPartial: false,
-                            completedAt: new Date(),
-                            transactionReference: reference,
-                            // Store which months were paid
-                            paidMonths: paidMonths
-                        }
-                    },
-                    { new: true }
-                );
-
-                console.log(`✅ HYBRID DUES payment recorded: ${paidMonths.length} months paid`);
-                result = { remainingTarget: 0 };
-                payment = updatedPayment;
+                console.log(`💰 Base: ₦${payment.amount}, Penalty: ₦${totalPenalty}`);
+                console.log(`💰 Expected: ₦${totalExpected}, Payable: ₦${totalPayable}`);
+                console.log(`💰 Amount paid: ₦${amountPaid}`);
 
                 // ============================================================
-                // Check if there are remaining unpaid months
+                // STRICT CHECK: Must pay FULL expected amount
+                // Allow 1 NGN tolerance for rounding
                 // ============================================================
-                const remainingMonths = payment.months.filter(m => !paidMonths.includes(m));
-                if (remainingMonths.length > 0) {
-                    console.log(`📅 Remaining months: ${remainingMonths.join(', ')} (${remainingMonths.length} months)`);
+                const isFullPayment = amountPaid >= totalPayable - 1;
 
-                    // Create a new payment for remaining months or update existing
-                    const remainingPayment = await Payment.findOne({
-                        user: payment.user,
-                        paymentTypeId: payment.paymentTypeId,
-                        organizationId: payment.organizationId,
-                        status: 'unpaid'
+                if (isFullPayment) {
+                    // ============================================================
+                    // FULL PAYMENT - Mark ALL months as paid
+                    // ============================================================
+                    const allMonths = payment.months || [];
+
+                    const updatedPayment = await Payment.findOneAndUpdate(
+                        { _id: payment._id },
+                        {
+                            $set: {
+                                status: 'paid',
+                                paidAt: new Date(),
+                                actualAmountPaid: amountPaid,
+                                netToOrganization: payment.targetOrgAmount || payment.amount,
+                                totalPaidSoFar: amountPaid,
+                                remainingAmount: 0,
+                                isPartial: false,
+                                completedAt: new Date(),
+                                transactionReference: reference,
+                                paidMonths: allMonths,
+                                penaltyAmount: 0
+                            }
+                        },
+                        { new: true }
+                    );
+
+                    console.log(`✅ FULL HYBRID DUES: ${allMonths.length} months paid`);
+                    console.log(`   Penalty cleared: ₦${totalPenalty}`);
+                    result = { remainingTarget: 0 };
+                    payment = updatedPayment;
+
+                } else {
+                    // ============================================================
+                    // PARTIAL OR INVALID PAYMENT - REJECT IT
+                    // Mark as unpaid and return error
+                    // ============================================================
+                    await Payment.findOneAndUpdate(
+                        { _id: payment._id },
+                        {
+                            $set: {
+                                status: 'unpaid',
+                                remainingAmount: totalExpected,
+                                totalPaidSoFar: 0,
+                                isPartial: false
+                            }
+                        },
+                        { new: true }
+                    );
+
+                    console.log(`❌ PARTIAL/INVALID PAYMENT REJECTED: ₦${amountPaid} (expected: ₦${totalPayable})`);
+
+                    // Return error response
+                    verificationInProgress.delete(reference);
+                    resolveVerification();
+                    return res.status(400).json({
+                        success: false,
+                        message: `Partial payment not allowed for dues. Expected amount: ₦${totalPayable}`,
+                        expectedAmount: totalPayable,
+                        paidAmount: amountPaid
                     });
-
-                    if (remainingPayment) {
-                        // Update existing with remaining months
-                        remainingPayment.months = remainingMonths;
-                        remainingPayment.monthCount = remainingMonths.length;
-                        remainingPayment.amount = remainingMonths.length * monthlyPrice;
-                        remainingPayment.targetOrgAmount = remainingMonths.length * monthlyPrice;
-                        remainingPayment.expectedAmount = Math.ceil(remainingPayment.amount / 0.96);
-                        remainingPayment.remainingAmount = remainingPayment.amount;
-                        await remainingPayment.save();
-                        console.log(`✅ Updated remaining payment: ${remainingMonths.length} months`);
-                    }
                 }
+            }
 
-            } else if (isPartialPayment) {
-                // Existing partial payment logic
+
+
+            // ============================================================
+            // NON-DUES PAYMENT - Use existing logic
+            // ============================================================
+            else if (isPartialPayment) {
+                // Existing partial payment logic for non-dues
                 result = await processPartialPayment(payment, amountPaid, reference, false);
                 console.log(`⚠️ Partial payment! Paid: ₦${amountPaid}, Target: ₦${targetAmount}, Remaining target: ₦${result.remainingTarget}`);
             } else {
-                // Existing full payment logic
+                // Existing full payment logic for non-dues
                 const updatedPayment = await Payment.findOneAndUpdate(
                     { _id: payment._id },
                     {
@@ -949,6 +1027,8 @@ router.get('/verify/:reference', verifyLimiter, validatePaymentVerification, asy
                 result = { remainingTarget: 0 };
                 payment = updatedPayment;
             }
+
+
 
             if (payment.type === 'registration') {
                 await User.findByIdAndUpdate(payment.user, { hasPaidRegistration: true });
@@ -1087,105 +1167,60 @@ router.post('/webhook', webhookLimiter, async (req, res) => {
                 // ============================================================
                 // HYBRID DUES: Handle webhook for dues payments
                 // ============================================================
+                // ============================================================
+                // HYBRID DUES: Webhook - Strict full payment only
+                // ============================================================
                 const isHybridDues = (payment.months && payment.months.length > 0) &&
                     (payment.type === 'dues' || payment.type === 'monthly_dues');
 
                 if (isHybridDues) {
                     const monthlyPrice = payment.monthlyPrice || (payment.amount / payment.months.length);
-                    const monthsCovered = Math.min(
-                        Math.floor(amountPaid / monthlyPrice),
-                        payment.months.length
-                    );
-                    const paidMonths = payment.months.slice(0, monthsCovered);
-                    // ============================================================
-                    // NEW: Check for penalties on paid months
-                    // ============================================================
-                    let penaltyCleared = 0;
-                    if (payment.penaltyBreakdown && payment.penaltyBreakdown.length > 0) {
-                        const clearedPenalties = payment.penaltyBreakdown.filter(b =>
-                            paidMonths.includes(b.month) && b.isLate
-                        );
-                        penaltyCleared = clearedPenalties.reduce((sum, b) => sum + b.penalty, 0);
-                    }
+                    const totalPenalty = payment.penaltyAmount || 0;
+                    const totalExpected = payment.amount + totalPenalty;
+                    const totalPayable = Math.ceil(totalExpected / 0.96);
 
-                    await Payment.findOneAndUpdate(
-                        { _id: payment._id },
-                        {
-                            $set: {
-                                status: 'paid',
-                                paidAt: new Date(),
-                                actualAmountPaid: amountPaid,
-                                netToOrganization: payment.targetOrgAmount,
-                                totalPaidSoFar: amountPaid,
-                                remainingAmount: 0,
-                                isPartial: false,
-                                completedAt: new Date(),
-                                transactionReference: tx_ref,
-                                paidMonths: paidMonths,
-                                penaltyAmount: Math.max(0, (payment.penaltyAmount || 0) - penaltyCleared)
-                            }
-                        }
-                    );
+                    console.log(`💰 Webhook - Expected: ₦${totalPayable}, Paid: ₦${amountPaid}`);
 
-                    // Remove cleared penalties from breakdown
-                    if (payment.penaltyBreakdown && payment.penaltyBreakdown.length > 0) {
-                        const remainingPenalties = payment.penaltyBreakdown.filter(
-                            b => !paidMonths.includes(b.month)
-                        );
-                        await Payment.updateOne(
+                    const isFullPayment = amountPaid >= totalPayable - 1;
+
+                    if (isFullPayment) {
+                        const allMonths = payment.months || [];
+
+                        await Payment.findOneAndUpdate(
                             { _id: payment._id },
-                            { $set: { penaltyBreakdown: remainingPenalties } }
-                        );
-                    }
-
-                    console.log(`✅ Webhook - HYBRID DUES payment recorded: ${paidMonths.length} months paid`);
-                    if (penaltyCleared > 0) {
-                        console.log(`✅ Webhook - Penalty cleared: ₦${penaltyCleared}`);
-                    }
-                    // Check for remaining months
-                    const remainingMonths = payment.months.filter(m => !paidMonths.includes(m));
-                    if (remainingMonths.length > 0) {
-                        const remainingPayment = await Payment.findOne({
-                            user: payment.user,
-                            paymentTypeId: payment.paymentTypeId,
-                            organizationId: payment.organizationId,
-                            status: 'unpaid'
-                        });
-
-                        if (remainingPayment) {
-                            const monthlyPriceFromType = payment.monthlyPrice || (payment.amount / payment.months.length);
-                            remainingPayment.months = remainingMonths;
-                            remainingPayment.monthCount = remainingMonths.length;
-                            remainingPayment.amount = remainingMonths.length * monthlyPriceFromType;
-                            remainingPayment.targetOrgAmount = remainingMonths.length * monthlyPriceFromType;
-                            remainingPayment.expectedAmount = Math.ceil(remainingPayment.amount / 0.96);
-                            remainingPayment.remainingAmount = remainingPayment.amount;
-                            await remainingPayment.save();
-                            console.log(`✅ Webhook - Updated remaining payment: ${remainingMonths.length} months`);
-                        }
-                    }
-
-                } else if (isPartialPayment) {
-                    await processPartialPayment(payment, amountPaid, tx_ref, false);
-                    console.log(`⚠️ Webhook - Partial payment! Paid: ₦${amountPaid}, Expected: ₦${expectedAmount}`);
-                } else {
-                    await Payment.findOneAndUpdate(
-                        { _id: payment._id },
-                        {
-                            $set: {
-                                status: 'paid',
-                                paidAt: new Date(),
-                                actualAmountPaid: amountPaid,
-                                netToOrganization: payment.targetOrgAmount,
-                                totalPaidSoFar: amountPaid,
-                                remainingAmount: 0,
-                                isPartial: false,
-                                completedAt: new Date(),
-                                transactionReference: tx_ref
+                            {
+                                $set: {
+                                    status: 'paid',
+                                    paidAt: new Date(),
+                                    actualAmountPaid: amountPaid,
+                                    netToOrganization: payment.targetOrgAmount,
+                                    totalPaidSoFar: amountPaid,
+                                    remainingAmount: 0,
+                                    isPartial: false,
+                                    completedAt: new Date(),
+                                    transactionReference: tx_ref,
+                                    paidMonths: allMonths,
+                                    penaltyAmount: 0
+                                }
                             }
-                        }
-                    );
-                    console.log(`✅ Webhook - Full payment recorded.`);
+                        );
+                        console.log(`✅ Webhook - FULL HYBRID DUES: ${allMonths.length} months paid`);
+
+                    } else {
+                        // Reject partial payment
+                        await Payment.findOneAndUpdate(
+                            { _id: payment._id },
+                            {
+                                $set: {
+                                    status: 'unpaid',
+                                    remainingAmount: totalExpected,
+                                    totalPaidSoFar: 0,
+                                    isPartial: false
+                                }
+                            }
+                        );
+                        console.log(`❌ Webhook - PARTIAL HYBRID DUES REJECTED: ₦${amountPaid} (expected: ₦${totalPayable})`);
+                    }
                 }
                 console.log(`✅ Webhook processed: Member paid ₦${amountPaid.toFixed(2)}`);
             }
