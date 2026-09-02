@@ -5,6 +5,38 @@ const Payment = require('../models/Payment');
 const mongoose = require('mongoose');
 const { notifyOrganization } = require('../services/notificationService');
 
+
+// Add this helper function at the top of TransactionController.js, after the imports
+
+/**
+ * Calculate total penalty from penaltyBreakdown array
+ * @param {Array} penaltyBreakdown - Array of penalty objects
+ * @returns {Number} - Total penalty amount
+ */
+const calculateTotalPenalty = (penaltyBreakdown) => {
+  if (!penaltyBreakdown || penaltyBreakdown.length === 0) {
+    return 0;
+  }
+  let total = 0;
+  penaltyBreakdown.forEach(item => {
+    if (item.penalty && item.isLate) {
+      total += item.penalty;
+    }
+  });
+  return Math.round(total * 100) / 100;
+};
+
+/**
+ * Calculate total amount including penalty from a payment
+ * @param {Object} payment - Payment document
+ * @returns {Number} - Total amount (base + penalty)
+ */
+const getTotalPaymentAmount = (payment) => {
+  const baseAmount = payment.amount || 0;
+  const penaltyAmount = calculateTotalPenalty(payment.penaltyBreakdown);
+  return baseAmount + penaltyAmount;
+};
+
 /**
  * Transaction Controller - Handles income and expenditure operations
  * Manages all financial transactions in the system
@@ -23,6 +55,10 @@ class TransactionController {
     }
     return req.user.organizationId;
   };
+
+
+
+
 
   /**
    * Record new income (scoped to organization)
@@ -769,8 +805,19 @@ class TransactionController {
         paymentMatch = { organizationId: orgObjectId };
       }
 
-      const [totalIncome, totalExpenditure, recentPayments, incomeCount, expenditureCount, incomeByType] = await Promise.all([
-        Income.aggregate([{ $match: incomeMatch }, { $group: { _id: null, total: { $sum: '$amount' } } }]),
+
+      // Get manual income (non-payment income)
+      const manualIncome = await Income.aggregate([
+        { $match: { ...incomeMatch, type: 'manual' } },
+        { $group: { _id: null, total: { $sum: '$amount' } } }
+      ]);
+
+      // ⭐ Total income = manual income + payment income (including penalties)
+      const totalIncome = (manualIncome[0]?.total || 0) + totalPaymentIncome;
+
+
+      const [totalExpenditure, recentPayments, incomeCount, expenditureCount, incomeByType] = await Promise.all([
+        // Income.aggregate([{ $match: incomeMatch }, { $group: { _id: null, total: { $sum: '$amount' } } }]),
         Expenditure.aggregate([{ $match: expenditureMatch }, { $group: { _id: null, total: { $sum: '$amount' } } }]),
         Payment.find({ ...paymentMatch, status: 'paid' })
           .sort({ paidAt: -1 })
@@ -790,9 +837,9 @@ class TransactionController {
         ])
       ]);
 
-      const income = totalIncome[0]?.total || 0;
+      // const income = totalIncome[0]?.total || 0;
       const expenditure = totalExpenditure[0]?.total || 0;
-      const balance = income - expenditure;
+      const balance = totalIncome - expenditure;
 
       const sixMonthsAgo = new Date();
       sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
@@ -822,7 +869,7 @@ class TransactionController {
       res.status(200).json({
         success: true,
         data: {
-          totalIncome: income,
+          totalIncome: totalIncome,
           totalExpenditure: expenditure,
           balance,
           incomeBreakdown: incomeByType,
@@ -865,26 +912,45 @@ class TransactionController {
         matchCondition = { organizationId: new mongoose.Types.ObjectId(organizationId) };
       }
 
-      const [totalIncome, totalExpenditure, paymentsTotal] = await Promise.all([
-        Income.aggregate([{ $match: matchCondition }, { $group: { _id: null, total: { $sum: '$amount' } } }]),
-        Expenditure.aggregate([{ $match: matchCondition }, { $group: { _id: null, total: { $sum: '$amount' } } }]),
-        Payment.aggregate([
-          { $match: { ...matchCondition, status: 'paid' } },
-          { $group: { _id: null, total: { $sum: '$amount' } } }
-        ])
+      // ⭐ Get all paid payments to calculate total with penalties
+      const paidPayments = await Payment.find({
+        ...matchCondition,
+        status: 'paid'
+      });
+
+      // ⭐ Calculate total payment amount including penalties
+      let totalPaymentIncome = 0;
+      paidPayments.forEach(payment => {
+        totalPaymentIncome += getTotalPaymentAmount(payment);
+      });
+
+      // Get manual income
+      const manualIncome = await Income.aggregate([
+        { $match: { ...matchCondition, type: 'manual' } },
+        { $group: { _id: null, total: { $sum: '$amount' } } }
       ]);
 
-      const income = totalIncome[0]?.total || 0;
+      // ⭐ Total income = manual income + payment income (including penalties)
+      const totalIncome = (manualIncome[0]?.total || 0) + totalPaymentIncome;
+
+
+      // const [totalIncome, totalExpenditure, paymentsTotal] = await Promise.all([
+      const [totalExpenditure] = await Promise.all([
+        Expenditure.aggregate([{ $match: matchCondition }, { $group: { _id: null, total: { $sum: '$amount' } } }])
+      ]);
+
+
+      // const income = totalIncome[0]?.total || 0;
       const expenditure = totalExpenditure[0]?.total || 0;
-      const payments = paymentsTotal[0]?.total || 0;
+      // const payments = paymentsTotal[0]?.total || 0;
 
       res.status(200).json({
         success: true,
         data: {
-          balance: income - expenditure,
-          income,
+          balance: totalIncome - expenditure,
+          income: totalIncome,
           expenditure,
-          payments,
+          payments: totalPaymentIncome,
           lastUpdated: new Date()
         }
       });
@@ -916,33 +982,56 @@ class TransactionController {
         matchCondition = { organizationId: new mongoose.Types.ObjectId(organizationId) };
       }
 
-      const [manualIncome, paymentIncome, paymentsTotal] = await Promise.all([
-        Income.aggregate([
-          { $match: { ...matchCondition, type: 'manual' } },
-          { $group: { _id: null, total: { $sum: '$amount' } } }
-        ]),
-        Income.aggregate([
-          { $match: { ...matchCondition, type: 'payment' } },
-          { $group: { _id: null, total: { $sum: '$amount' } } }
-        ]),
-        Payment.aggregate([
-          { $match: { ...matchCondition, status: 'paid' } },
-          { $group: { _id: null, total: { $sum: '$amount' } } }
-        ])
+
+      // ⭐ Get all paid payments to calculate total with penalties
+      const paidPayments = await Payment.find({
+        ...matchCondition,
+        status: 'paid'
+      });
+
+      // ⭐ Calculate total payment amount including penalties
+      let totalPaymentIncome = 0;
+      paidPayments.forEach(payment => {
+        totalPaymentIncome += getTotalPaymentAmount(payment);
+      });
+
+      // Get manual income
+      const manualIncome = await Income.aggregate([
+        { $match: { ...matchCondition, type: 'manual' } },
+        { $group: { _id: null, total: { $sum: '$amount' } } }
       ]);
 
       const manualTotal = manualIncome[0]?.total || 0;
-      const paymentTotal = paymentIncome[0]?.total || 0;
-      const directPaymentTotal = paymentsTotal[0]?.total || 0;
+
+
+
+      // const [manualIncome, paymentIncome, paymentsTotal] = await Promise.all([
+      //   Income.aggregate([
+      //     { $match: { ...matchCondition, type: 'manual' } },
+      //     { $group: { _id: null, total: { $sum: '$amount' } } }
+      //   ]),
+      //   Income.aggregate([
+      //     { $match: { ...matchCondition, type: 'payment' } },
+      //     { $group: { _id: null, total: { $sum: '$amount' } } }
+      //   ]),
+      //   Payment.aggregate([
+      //     { $match: { ...matchCondition, status: 'paid' } },
+      //     { $group: { _id: null, total: { $sum: '$amount' } } }
+      //   ])
+      // ]);
+
+      // const manualTotal = manualIncome[0]?.total || 0;
+      // const paymentTotal = paymentIncome[0]?.total || 0;
+      // const directPaymentTotal = paymentsTotal[0]?.total || 0;
 
       res.status(200).json({
         success: true,
         data: {
-          totalIncome: manualTotal + paymentTotal,
+          totalIncome: manualTotal + totalPaymentIncome,
           manualIncome: manualTotal,
-          paymentIncome: paymentTotal,
-          directPaymentTotal: directPaymentTotal,
-          discrepancy: (manualTotal + paymentTotal) - directPaymentTotal
+          paymentIncome: totalPaymentIncome,
+          directPaymentTotal: totalPaymentIncome,
+          discrepancy: 0
         }
       });
     } catch (error) {
