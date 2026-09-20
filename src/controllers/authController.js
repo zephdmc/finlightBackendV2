@@ -225,6 +225,8 @@ exports.login = async (req, res, next) => {
  * @access  Public
  */
 exports.signupWithOrg = async (req, res, next) => {
+  let organization = null;   // ← hoisted
+  let user = null;           // ← hoisted
   try {
     const { orgName, adminName, adminEmail, adminPassword } = req.body;
 
@@ -236,10 +238,10 @@ exports.signupWithOrg = async (req, res, next) => {
       });
     }
 
-    if (adminPassword.length < 6) {
+    if (adminPassword.length < 8) {
       return res.status(400).json({
         success: false,
-        message: 'Password must be at least 6 characters'
+        message: 'Password must be at least 8 characters'
       });
     }
 
@@ -247,7 +249,9 @@ exports.signupWithOrg = async (req, res, next) => {
     const slug = orgName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
 
     // 3. Check if organization slug already exists
-    const existingOrg = await Organization.findOne({ slug });
+    const existingOrg = await Organization.findOne({
+      $or: [{ slug }, { name: orgName }]
+    });
     if (existingOrg) {
       return res.status(400).json({
         success: false,
@@ -268,12 +272,6 @@ exports.signupWithOrg = async (req, res, next) => {
     const organization = await Organization.create({
       name: orgName,
       slug,
-      paystack: {
-        subaccountCode: '',
-        bankName: '',
-        accountNumber: '',
-        percentageCharge: 0
-      },
       status: 'active',
       settings: {
         registrationFee: 500,
@@ -310,20 +308,24 @@ exports.signupWithOrg = async (req, res, next) => {
       { expiresIn: process.env.JWT_EXPIRE || '7d' }
     );
     // 8. Send welcome email (non-blocking)
-    addToEmailQueue({
-      name: `welcome-${user.email}`,
-      maxRetries: 5,
-      task: async () => {
-        const loginUrl = `${process.env.FRONTEND_URL}/login`;
+    try {
+      addToEmailQueue({
+        name: `welcome-${user.email}`,
+        maxRetries: 5,
+        task: async () => {
+          const loginUrl = `${process.env.FRONTEND_URL}/login`;
 
-        await sendOrganizationWelcomeEmail(
-          user.email,
-          user.name,
-          organization.name,
-          loginUrl
-        );
-      }
-    });
+          await sendOrganizationWelcomeEmail(
+            user.email,
+            user.name,
+            organization.name,
+            loginUrl
+          );
+        }
+      });
+    } catch (emailErr) {
+      console.error('⚠️ Welcome email queue failed (non-fatal):', emailErr.message);
+    }
     // Return user with phoneNumber
     res.status(201).json({
       success: true,
@@ -346,7 +348,14 @@ exports.signupWithOrg = async (req, res, next) => {
     });
   } catch (error) {
     console.error('Signup error:', error);
-
+    if (organization && !user) {
+      try {
+        await Organization.findByIdAndDelete(organization._id);
+        console.log(`🧹 Rolled back orphan organization ${organization._id}`);
+      } catch (rollbackErr) {
+        console.error('Rollback failed:', rollbackErr.message);
+      }
+    }
     // Handle duplicate key error
     if (error.code === 11000) {
       if (error.keyPattern?.slug) {

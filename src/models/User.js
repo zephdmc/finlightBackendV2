@@ -90,7 +90,7 @@ const userSchema = new mongoose.Schema({
    */
   billingCycleOverride: {
     type: String,
-    enum: ['weekly', 'monthly', 'quarterly', 'yearly'],
+    enum: ['weekly', 'monthly', 'quarterly', 'yearly', null],
     default: null,
     comment: 'Override the default billing cycle for this member'
   },
