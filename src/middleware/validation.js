@@ -13,9 +13,10 @@ class ValidationMiddleware {
     if (!errors.isEmpty()) {
       // Log validation failures for security monitoring
       console.warn(`Validation failed for ${req.method} ${req.url}:`, errors.array());
-      
+
       return res.status(400).json({
         success: false,
+        message: errors.array()[0]?.message || 'Validation failed',
         errors: errors.array().map(err => ({
           field: err.param,
           message: err.msg
@@ -43,7 +44,7 @@ class ValidationMiddleware {
       cleaned = cleaned.substring(0, 5000);
       return cleaned;
     };
-    
+
     if (req.body) {
       Object.keys(req.body).forEach(key => {
         if (typeof req.body[key] === 'string') {
@@ -63,7 +64,7 @@ class ValidationMiddleware {
         }
       });
     }
-    
+
     if (req.query) {
       Object.keys(req.query).forEach(key => {
         if (typeof req.query[key] === 'string') {
@@ -71,7 +72,7 @@ class ValidationMiddleware {
         }
       });
     }
-    
+
     next();
   }
 
@@ -81,9 +82,9 @@ class ValidationMiddleware {
   static preventNoSQLInjection(req, res, next) {
     const hasMongoOperators = (obj) => {
       if (!obj || typeof obj !== 'object') return false;
-      
+
       const dangerousKeys = ['$', '$gt', '$lt', '$ne', '$in', '$nin', '$or', '$and', '$not', '$exists', '$regex'];
-      
+
       for (const key of Object.keys(obj)) {
         if (dangerousKeys.includes(key)) {
           return true;
@@ -94,7 +95,7 @@ class ValidationMiddleware {
       }
       return false;
     };
-    
+
     try {
       if (hasMongoOperators(req.body) || hasMongoOperators(req.query)) {
         console.warn(`NoSQL injection attempt detected from IP: ${req.ip}`);
@@ -123,11 +124,11 @@ class ValidationMiddleware {
       body('password')
         .notEmpty()
         .withMessage('Password is required')
-        .isLength({ min: 6, max: 100 })
-        .withMessage('Password must be between 6 and 100 characters'),
+        .isLength({ min: 8, max: 100 })
+        .withMessage('Password must be between 8 and 100 characters'),
       ValidationMiddleware.validate
     ],
-    
+
     changePassword: [
       body('currentPassword')
         .notEmpty()
@@ -141,7 +142,7 @@ class ValidationMiddleware {
         .withMessage('New password must be different from current password'),
       ValidationMiddleware.validate
     ],
-    
+
     register: [
       body('name')
         .notEmpty()
@@ -168,7 +169,7 @@ class ValidationMiddleware {
         .withMessage('Role must be either admin or member'),
       ValidationMiddleware.validate
     ],
-    
+
     signup: [
       body('orgName')
         .notEmpty()
@@ -195,7 +196,7 @@ class ValidationMiddleware {
         .withMessage('Password must contain at least one letter and one number'),
       ValidationMiddleware.validate
     ],
-    
+
 
     forgotPassword: [
       body('email')
@@ -204,7 +205,7 @@ class ValidationMiddleware {
         .normalizeEmail(),
       ValidationMiddleware.validate
     ],
-    
+
     resetPassword: [
       param('token')
         .notEmpty()
@@ -216,7 +217,7 @@ class ValidationMiddleware {
         .withMessage('Password must contain at least one letter and one number'),
       ValidationMiddleware.validate
     ],
-    
+
     verifyAdminPin: [
       body('pin')
         .notEmpty()
@@ -253,7 +254,7 @@ class ValidationMiddleware {
         .withMessage('Role must be either admin or member'),
       ValidationMiddleware.validate
     ],
-    
+
     update: [
       param('id')
         .isMongoId()
@@ -274,7 +275,7 @@ class ValidationMiddleware {
         .withMessage('Password must be between 6 and 100 characters'),
       ValidationMiddleware.validate
     ],
-    
+
     resetPassword: [
       param('id')
         .isMongoId()
@@ -286,7 +287,7 @@ class ValidationMiddleware {
         .withMessage('Password must contain at least one letter and one number'),
       ValidationMiddleware.validate
     ],
-    
+
     bulkImport: [
       body('members')
         .isArray({ min: 1, max: 500 })
@@ -333,14 +334,14 @@ class ValidationMiddleware {
         .withMessage('Description cannot exceed 500 characters'),
       ValidationMiddleware.validate
     ],
-    
+
     initialize: [
       body('paymentId')
         .isMongoId()
         .withMessage('Invalid payment ID'),
       ValidationMiddleware.validate
     ],
-    
+
     verify: [
       param('reference')
         .notEmpty()
@@ -349,7 +350,7 @@ class ValidationMiddleware {
         .withMessage('Invalid reference format'),
       ValidationMiddleware.validate
     ],
-    
+
     adminDirect: [
       body('userId')
         .isMongoId()
@@ -394,7 +395,7 @@ class ValidationMiddleware {
         .toDate(),
       ValidationMiddleware.validate
     ],
-    
+
     expenditure: [
       body('amount')
         .isFloat({ min: 0.01, max: 10000000 })
@@ -421,7 +422,7 @@ class ValidationMiddleware {
         .toDate(),
       ValidationMiddleware.validate
     ],
-    
+
     updateIncome: [
       param('id')
         .isMongoId()
@@ -442,7 +443,7 @@ class ValidationMiddleware {
         .withMessage('Description cannot exceed 500 characters'),
       ValidationMiddleware.validate
     ],
-    
+
     updateExpenditure: [
       param('id')
         .isMongoId()
@@ -502,7 +503,7 @@ class ValidationMiddleware {
         .withMessage('Invalid end date format'),
       ValidationMiddleware.validate
     ],
-    
+
     monthly: [
       query('year')
         .optional()
@@ -558,7 +559,7 @@ class ValidationMiddleware {
         .withMessage('Admin password must be at least 6 characters'),
       ValidationMiddleware.validate
     ],
-    
+
     update: [
       param('id')
         .isMongoId()

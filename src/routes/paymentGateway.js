@@ -162,9 +162,7 @@ try {
     };
 }
 
-console.log('✅ Payment Gateway loaded (Flutterwave)');
-console.log('   Flutterwave Key:', FLW_SECRET_KEY ? 'Configured' : 'MISSING');
-console.log('   Platform Subaccount ID:', PLATFORM_SUBACCOUNT_ID ? 'Configured' : 'MISSING');
+
 
 // ==================== RATE LIMITING ====================
 const paymentInitLimiter = rateLimit({

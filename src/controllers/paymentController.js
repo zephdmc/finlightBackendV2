@@ -688,6 +688,61 @@ exports.getPaymentById = async (req, res, next) => {
 // @desc    Get all paid payments as income records (for reports)
 // @route   GET /api/payments/public/income
 // @access  Private
+// exports.getPublicIncome = async (req, res, next) => {
+//     try {
+//         const organizationId = req.user.organizationId;
+//         const userRole = req.user.role;
+//         let query = { status: 'paid' };
+
+//         if (!['super-admin', 'super_admin'].includes(userRole)) {
+//             if (!organizationId) {
+//                 return res.status(400).json({ success: false, message: 'Organization ID not found for this user' });
+//             }
+//             query.organizationId = organizationId;
+//         }
+
+//         const payments = await Payment.find(query)
+//             .populate('user', 'name')
+//             .populate('paymentTypeId', 'name')
+//             .sort({ paidAt: -1 })
+//             .limit(200);
+
+//         const incomeRecords = payments.map(payment => {
+//             let source = payment.paymentTypeId?.name || payment.type || 'Member Payment';
+//             source = source.split(' ').map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()).join(' ');
+//             let description = payment.description || `${source} payment from ${payment.user?.name || 'Member'}`;
+
+//             return {
+//                 _id: payment._id,
+//                 amount: payment.netToOrganization || payment.amount,
+//                 description,
+//                 source,
+//                 date: payment.paidAt || payment.createdAt,
+//                 type: 'member_payment',
+//                 memberName: payment.user?.name || 'Member',
+//                 paymentType: source,
+//                 isPartial: payment.isPartial,
+//                 remainingAmount: payment.remainingAmount,
+//                 periodKey: payment.periodKey
+//             };
+//         });
+
+//         const totalCollected = payments.reduce((sum, p) => sum + (p.netToOrganization || p.amount || 0), 0);
+
+//         res.status(200).json({
+//             success: true,
+//             data: {
+//                 records: incomeRecords,
+//                 summary: { totalCollected, totalCount: payments.length, lastUpdated: new Date() }
+//             }
+//         });
+//     } catch (error) {
+//         next(error);
+//     }
+// };
+// @desc    Get all paid payments as income records (for reports)
+// @route   GET /api/payments/public/income
+// @access  Private
 exports.getPublicIncome = async (req, res, next) => {
     try {
         const organizationId = req.user.organizationId;
@@ -708,39 +763,111 @@ exports.getPublicIncome = async (req, res, next) => {
             .limit(200);
 
         const incomeRecords = payments.map(payment => {
-            let source = payment.paymentTypeId?.name || payment.type || 'Member Payment';
-            source = source.split(' ').map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()).join(' ');
-            let description = payment.description || `${source} payment from ${payment.user?.name || 'Member'}`;
+            // ============================================================
+            // ⭐ Calculate total penalty from penaltyBreakdown
+            // ============================================================
+            let totalPenalty = 0;
+            if (Array.isArray(payment.penaltyBreakdown) && payment.penaltyBreakdown.length > 0) {
+                payment.penaltyBreakdown.forEach(item => {
+                    if (item.penalty && item.isLate !== false) {
+                        totalPenalty += item.penalty;
+                    }
+                });
+            }
+            // Fallback to penaltyAmount field
+            if (totalPenalty === 0 && payment.penaltyAmount > 0) {
+                totalPenalty = payment.penaltyAmount;
+            }
 
+            // ============================================================
+            // ⭐ Determine base amount and total amount
+            // ============================================================
+            const isPartial = payment.isPartial === true;
+            const isHybridDues = (payment.type === 'dues' || payment.type === 'monthly_dues')
+                && payment.months && payment.months.length > 0;
+
+            let baseAmount;
+            let totalAmount;
+
+            if (isHybridDues) {
+                // Hybrid dues: amount field stores base months total
+                baseAmount = payment.amount || 0;
+                totalAmount = baseAmount + totalPenalty;
+            } else if (isPartial) {
+                // Partial payment: use totalPaidSoFar
+                const totalPaid = payment.totalPaidSoFar || 0;
+                baseAmount = totalPaid - totalPenalty;
+                totalAmount = totalPaid;
+            } else {
+                // Full payment: amount is base, add penalty
+                baseAmount = payment.amount || 0;
+                totalAmount = baseAmount + totalPenalty;
+            }
+
+            // ============================================================
+            // ⭐ Source/description formatting
+            // ============================================================
+            let source = payment.paymentTypeId?.name || payment.type || 'Member Payment';
+            source = source.split(' ').map(word =>
+                word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()
+            ).join(' ');
+
+            let description = payment.description ||
+                `${source} payment from ${payment.user?.name || 'Member'}`;
+
+            // ============================================================
+            // ⭐ Return enriched record
+            // ============================================================
             return {
                 _id: payment._id,
-                amount: payment.netToOrganization || payment.amount,
+                // Amounts
+                amount: totalAmount,              // ⭐ total incl penalty (used for income sum)
+                baseAmount: baseAmount,           // ⭐ base without penalty
+                penaltyAmount: totalPenalty,      // ⭐ just the penalty
+                hasPenalty: totalPenalty > 0,     // ⭐ convenience flag
+                // Partial
+                isPartial: isPartial,
+                totalPaidSoFar: payment.totalPaidSoFar || 0,
+                remainingAmount: payment.remainingAmount || 0,
+                // Hybrid dues
+                months: payment.months || [],
+                monthCount: payment.monthCount || 0,
+                paidMonths: payment.paidMonths || [],
+                // Meta
                 description,
                 source,
                 date: payment.paidAt || payment.createdAt,
+                paidAt: payment.paidAt,
                 type: 'member_payment',
                 memberName: payment.user?.name || 'Member',
                 paymentType: source,
-                isPartial: payment.isPartial,
-                remainingAmount: payment.remainingAmount,
-                periodKey: payment.periodKey
+                periodKey: payment.periodKey,
+                penaltyBreakdown: payment.penaltyBreakdown || []
             };
         });
 
-        const totalCollected = payments.reduce((sum, p) => sum + (p.netToOrganization || p.amount || 0), 0);
+        // ============================================================
+        // ⭐ Totals
+        // ============================================================
+        const totalCollected = incomeRecords.reduce((sum, p) => sum + (p.amount || 0), 0);
+        const totalPenalty = incomeRecords.reduce((sum, p) => sum + (p.penaltyAmount || 0), 0);
 
         res.status(200).json({
             success: true,
             data: {
                 records: incomeRecords,
-                summary: { totalCollected, totalCount: payments.length, lastUpdated: new Date() }
+                summary: {
+                    totalCollected,
+                    totalPenalty,
+                    totalCount: payments.length,
+                    lastUpdated: new Date()
+                }
             }
         });
     } catch (error) {
         next(error);
     }
 };
-
 // @desc    Get payment summary (for reporting)
 // @route   GET /api/payments/summary
 // @access  Private/Admin
