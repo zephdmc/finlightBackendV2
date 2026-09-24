@@ -28,11 +28,9 @@ const sendPaymentTypeNotifications = async (paymentType, organizationId, organiz
     );
 
     if (members.length === 0) {
-      console.log('⚠️ No active members with valid emails found');
-      return { total: 0, sent: 0, failed: 0 };
+            return { total: 0, sent: 0, failed: 0 };
     }
 
-    console.log(`📧 Sending ${isUpdate ? 'update' : 'new'} payment type notifications to ${members.length} members`);
 
     let sent = 0;
     let failed = 0;
@@ -53,7 +51,6 @@ const sendPaymentTypeNotifications = async (paymentType, organizationId, organiz
         );
 
         sent++;
-        console.log(`✅ Email sent to ${member.email} (${sent}/${members.length})`);
 
         await new Promise(resolve => setTimeout(resolve, 100));
 
@@ -63,8 +60,7 @@ const sendPaymentTypeNotifications = async (paymentType, organizationId, organiz
       }
     }
 
-    console.log(`📧 Payment type notifications completed: ${sent} sent, ${failed} failed`);
-    return { total: members.length, sent, failed };
+        return { total: members.length, sent, failed };
 
   } catch (error) {
     console.error('❌ Error sending payment type notifications:', error);
@@ -405,7 +401,6 @@ exports.createPaymentType = async (req, res, next) => {
   try {
     const organizationId = getOrgId(req);
 
-    console.log('📥 Received payment type data:', req.body);
 
     // Validate required fields
     if (!req.body.name) {
@@ -485,11 +480,9 @@ exports.createPaymentType = async (req, res, next) => {
       due_date_after: parseInt(req.body.due_date_after) || 30,
     };
 
-    console.log('📤 Creating payment type with data:', paymentTypeData);
 
     const paymentType = await PaymentType.create(paymentTypeData);
 
-    console.log('✅ Payment type created:', paymentType);
 
     // Get organization name for notifications
     const Organization = require('../models/Organization');
@@ -499,8 +492,7 @@ exports.createPaymentType = async (req, res, next) => {
     // Send email notifications to all members in the background
     sendPaymentTypeNotifications(paymentType, organizationId, organizationName, false)
       .then(result => {
-        console.log(`✅ Payment type email notifications completed: ${result.sent}/${result.total} sent`);
-      })
+              })
       .catch(error => {
         console.error('❌ Background email notification failed:', error);
       });
@@ -624,7 +616,6 @@ exports.updatePaymentType = async (req, res, next) => {
   try {
     const organizationId = getOrgId(req);
 
-    console.log('📥 Updating payment type:', req.body);
 
     const { frequency, duration_value, duration_unit } = req.body;
     if (frequency && frequency !== 'one-time') {
@@ -683,7 +674,6 @@ exports.updatePaymentType = async (req, res, next) => {
       isActive: req.body.isActive !== undefined ? req.body.isActive : true,
     };
 
-    console.log('📤 Updating payment type with data:', updateData);
 
     const paymentType = await PaymentType.findOneAndUpdate(
       { _id: req.params.id, organizationId },

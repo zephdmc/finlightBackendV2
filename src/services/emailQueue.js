@@ -39,13 +39,11 @@ const processQueue = async () => {
 
             try {
                 await job.task();
-                console.log(`✅ Email sent: ${job.name}`);
-            } catch (error) {
+                            } catch (error) {
                 console.error(`❌ Email failed: ${job.name}`, error.message);
 
                 if (job.retries < job.maxRetries) {
                     job.retries++;
-                    console.log(`🔁 Retrying (${job.retries}/${job.maxRetries})`);
 
                     await delay(2000);
                     queue.push(job);

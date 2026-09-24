@@ -1,4 +1,4 @@
-const mongoose = require('mongoose');
+﻿const mongoose = require('mongoose');
 
 /**
  * Payment Type Schema
@@ -161,9 +161,9 @@ PaymentTypeSchema.index({ organizationId: 1, type: 1, isActive: 1 });
 // Virtual for formatted amount
 PaymentTypeSchema.virtual('formattedAmount').get(function () {
   if (this.amount === undefined || this.amount === null) {
-    return '₦0';
+    return 'â‚¦0';
   }
-  return `₦${this.amount.toLocaleString()}`;
+  return `â‚¦${this.amount.toLocaleString()}`;
 });
 
 // Virtual for schedule text
@@ -567,11 +567,9 @@ PaymentTypeSchema.pre('save', function (next) {
 });
 
 PaymentTypeSchema.post('save', function (doc) {
-  console.log(`Payment type created/updated: ${doc.name} (Org: ${doc.organizationId}, Category: ${doc.type})`);
 });
 
 PaymentTypeSchema.post('remove', function (doc) {
-  console.log(`Payment type removed: ${doc.name} from organization ${doc.organizationId}`);
 });
 
 // ============= HELPER FUNCTIONS =============

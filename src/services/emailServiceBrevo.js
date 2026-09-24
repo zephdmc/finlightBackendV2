@@ -1,4 +1,4 @@
-// backend/src/services/emailServiceBrevo.js
+﻿// backend/src/services/emailServiceBrevo.js
 require('dotenv').config();
 
 /**
@@ -12,12 +12,12 @@ const sendEmailViaBrevo = async (to, name, subject, htmlContent) => {
 
   // Validate configuration
   if (!BREVO_API_KEY) {
-    console.error('❌ BREVO_API_KEY not configured in environment variables');
+    console.error('âŒ BREVO_API_KEY not configured in environment variables');
     return false;
   }
 
   if (!SENDER_EMAIL) {
-    console.error('❌ Sender email not configured');
+    console.error('âŒ Sender email not configured');
     return false;
   }
 
@@ -49,15 +49,13 @@ const sendEmailViaBrevo = async (to, name, subject, htmlContent) => {
     const result = await response.json();
 
     if (!response.ok) {
-      console.error('❌ Brevo API Error:', result);
+      console.error('âŒ Brevo API Error:', result);
       return false;
     }
 
-    console.log(`✅ Email sent to ${to} via Brevo HTTP API`);
-    console.log(`📧 Message ID: ${result.messageId}`);
     return true;
   } catch (error) {
-    console.error('❌ Brevo send error:', error.message);
+    console.error('âŒ Brevo send error:', error.message);
     return false;
   }
 };
@@ -91,16 +89,16 @@ const sendPasswordResetEmail = async (email, name, resetUrl) => {
           <p>Hello <strong>${name || 'User'}</strong>,</p>
           <p>We received a request to reset the password for your FinLight account.</p>
           <div style="text-align: center;">
-            <a href="${resetUrl}" class="button" style="color: white;">Reset Password →</a>
+            <a href="${resetUrl}" class="button" style="color: white;">Reset Password â†’</a>
           </div>
           <div class="warning">
-            <p>🔒 This link expires in <strong>1 hour</strong> for security.</p>
+            <p>ðŸ”’ This link expires in <strong>1 hour</strong> for security.</p>
             <p>If you didn't request this, please ignore this email.</p>
           </div>
           <p>Or copy this link: ${resetUrl}</p>
         </div>
         <div class="footer">
-          <p>© ${new Date().getFullYear()} FinLight. All rights reserved.</p>
+          <p>Â© ${new Date().getFullYear()} FinLight. All rights reserved.</p>
         </div>
       </div>
     </body>
@@ -133,32 +131,32 @@ const sendOrganizationWelcomeEmail = async (adminEmail, adminName, organizationN
     <body>
       <div class="container">
         <div class="header">
-          <h1>Welcome to FinLight! 🎉</h1>
+          <h1>Welcome to FinLight! ðŸŽ‰</h1>
           <p>Your organization has been successfully created</p>
         </div>
         <div class="content">
           <p>Dear <strong>${adminName}</strong>,</p>
           <p>Congratulations! Your organization <strong>${organizationName}</strong> has been successfully set up on the FinLight platform.</p>
           <div class="details">
-            <h3>📋 Organization Details:</h3>
+            <h3>ðŸ“‹ Organization Details:</h3>
             <p><strong>Organization Name:</strong> ${organizationName}</p>
             <p><strong>Admin Email:</strong> ${adminEmail}</p>
-            <p><strong>Account Status:</strong> Active ✅</p>
+            <p><strong>Account Status:</strong> Active âœ…</p>
           </div>
           <p>You can now:</p>
           <ul>
-            <li>✅ Login to your admin dashboard</li>
-            <li>✅ Create payment types (dues, levies, etc.)</li>
-            <li>✅ Add and manage members</li>
-            <li>✅ Configure bank details to receive payments</li>
+            <li>âœ… Login to your admin dashboard</li>
+            <li>âœ… Create payment types (dues, levies, etc.)</li>
+            <li>âœ… Add and manage members</li>
+            <li>âœ… Configure bank details to receive payments</li>
           </ul>
           <div style="text-align: center;">
-            <a href="${loginUrl}" class="button" style="color: white;">Access Your Dashboard →</a>
+            <a href="${loginUrl}" class="button" style="color: white;">Access Your Dashboard â†’</a>
           </div>
           <p>Best regards,<br><strong>The FinLight Team</strong></p>
         </div>
         <div class="footer">
-          <p>© ${new Date().getFullYear()} FinLight. All rights reserved.</p>
+          <p>Â© ${new Date().getFullYear()} FinLight. All rights reserved.</p>
         </div>
       </div>
     </body>
@@ -172,10 +170,10 @@ const sendOrganizationWelcomeEmail = async (adminEmail, adminName, organizationN
 const sendMemberWelcomeEmail = async (email, name, organizationName, loginUrl, password = null) => {
   const passwordSection = password ? `
     <div style="background: #e0e7ff; padding: 15px; border-radius: 8px; margin: 20px 0;">
-      <h3 style="margin-top: 0;">🔐 Your Login Credentials:</h3>
+      <h3 style="margin-top: 0;">ðŸ” Your Login Credentials:</h3>
       <p><strong>Email:</strong> ${email}</p>
       <p><strong>Password:</strong> ${password}</p>
-      <p style="font-size: 12px; color: #666;">⚠️ Please change your password after first login</p>
+      <p style="font-size: 12px; color: #666;">âš ï¸ Please change your password after first login</p>
     </div>
   ` : '';
 
@@ -197,7 +195,7 @@ const sendMemberWelcomeEmail = async (email, name, organizationName, loginUrl, p
     <body>
       <div class="container">
         <div class="header">
-          <h1>Welcome to ${organizationName}! 🎉</h1>
+          <h1>Welcome to ${organizationName}! ðŸŽ‰</h1>
         </div>
         <div class="content">
           <p>Hello <strong>${name}</strong>,</p>
@@ -209,13 +207,13 @@ const sendMemberWelcomeEmail = async (email, name, organizationName, loginUrl, p
           <p>You can now log in and start using your account.</p>
           
           <div style="text-align:center; margin: 20px 0;">
-            <a href="${loginUrl}" class="button">Login to Dashboard →</a>
+            <a href="${loginUrl}" class="button">Login to Dashboard â†’</a>
           </div>
           
           <p style="font-size: 12px; color: #888;">If you did not expect this email, please ignore it or contact your organization administrator.</p>
         </div>
         <div class="footer">
-          <p>© ${new Date().getFullYear()} FinLight. All rights reserved.</p>
+          <p>Â© ${new Date().getFullYear()} FinLight. All rights reserved.</p>
         </div>
       </div>
     </body>
@@ -234,19 +232,19 @@ const sendPaymentTypeNotificationEmail = async (email, name, paymentType, organi
   }).format(paymentType.amount);
 
   const mandatoryBadge = paymentType.is_mandatory
-    ? '<span style="background: #fee2e2; color: #dc2626; padding: 4px 12px; border-radius: 20px; font-size: 12px;">⚠️ MANDATORY</span>'
-    : '<span style="background: #e0e7ff; color: #4f46e5; padding: 4px 12px; border-radius: 20px; font-size: 12px;">✨ Optional</span>';
+    ? '<span style="background: #fee2e2; color: #dc2626; padding: 4px 12px; border-radius: 20px; font-size: 12px;">âš ï¸ MANDATORY</span>'
+    : '<span style="background: #e0e7ff; color: #4f46e5; padding: 4px 12px; border-radius: 20px; font-size: 12px;">âœ¨ Optional</span>';
 
   const frequencyText = paymentType.frequency === 'one-time'
     ? 'One-time payment'
     : `${paymentType.frequency} payment`;
 
   const subject = isUpdate
-    ? `📝 Payment Updated: ${paymentType.name} - ${formattedAmount}`
+    ? `ðŸ“ Payment Updated: ${paymentType.name} - ${formattedAmount}`
     : ` New Payment Created: ${paymentType.name} - ${formattedAmount}`;
 
   const headerTitle = isUpdate ? 'Payment Details Updated' : 'New Payment Created';
-  const headerIcon = isUpdate ? '📝' : '!';
+  const headerIcon = isUpdate ? 'ðŸ“' : '!';
   const actionText = isUpdate ? 'View Updated Details' : 'Make Payment Now';
 
   const htmlContent = `
@@ -314,12 +312,12 @@ const sendPaymentTypeNotificationEmail = async (email, name, paymentType, organi
           
           ${paymentType.is_mandatory ? `
             <div class="warning">
-              ⚠️ <strong>Important:</strong> This is a mandatory payment. Please ensure you make this payment by the due date to avoid penalties.
+              âš ï¸ <strong>Important:</strong> This is a mandatory payment. Please ensure you make this payment by the due date to avoid penalties.
             </div>
           ` : ''}
           
           <div style="text-align: center; margin: 30px 0;">
-            <a href="${paymentsUrl}" class="button">${actionText} →</a>
+            <a href="${paymentsUrl}" class="button">${actionText} â†’</a>
             <a href="${loginUrl}" class="button button-secondary">Go to Dashboard</a>
           </div>
           
@@ -327,7 +325,7 @@ const sendPaymentTypeNotificationEmail = async (email, name, paymentType, organi
         </div>
         
         <div class="footer">
-          <p>© ${new Date().getFullYear()} FinLight. All rights reserved.</p>
+          <p>Â© ${new Date().getFullYear()} FinLight. All rights reserved.</p>
           <p>This is an automated message, please do not reply.</p>
         </div>
       </div>

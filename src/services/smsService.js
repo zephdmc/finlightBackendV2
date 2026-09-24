@@ -9,8 +9,7 @@ const initAfricaSTalking = () => {
   try {
     // Check if credentials exist
     if (!process.env.AFRICASTALKING_API_KEY || !process.env.AFRICASTALKING_USERNAME) {
-      console.log('⚠️ Africa\'s Talking credentials not configured. SMS service disabled.');
-      return null;
+            return null;
     }
 
     const credentials = {
@@ -22,8 +21,7 @@ const initAfricaSTalking = () => {
     const africasTalking = africastalking(credentials);
     sms = africasTalking.SMS;
     isConfigured = true;
-    console.log('✅ Africa\'s Talking SMS service initialized');
-    return sms;
+        return sms;
   } catch (error) {
     console.error('❌ Failed to initialize Africa\'s Talking:', error.message);
     return null;
@@ -37,25 +35,25 @@ const initAfricaSTalking = () => {
  */
 const formatPhoneNumber = (phoneNumber) => {
   if (!phoneNumber) return null;
-  
+
   // Remove any spaces or special characters
   let cleaned = phoneNumber.replace(/\s+/g, '');
-  
+
   // If starts with 0, replace with 234
   if (cleaned.startsWith('0')) {
     return '234' + cleaned.slice(1);
   }
-  
+
   // If starts with +234, remove the +
   if (cleaned.startsWith('+234')) {
     return cleaned.slice(1);
   }
-  
+
   // If already in 234 format, return as is
   if (cleaned.startsWith('234')) {
     return cleaned;
   }
-  
+
   return cleaned;
 };
 
@@ -67,19 +65,16 @@ const formatPhoneNumber = (phoneNumber) => {
  */
 const sendSMS = async (phoneNumber, message) => {
   if (!isConfigured || !sms) {
-    console.log('⚠️ SMS service not configured. Would have sent:', { phoneNumber, message });
     return false;
   }
 
   if (!phoneNumber) {
-    console.log('⚠️ No phone number provided. Skipping SMS.');
-    return false;
+        return false;
   }
 
   const formattedNumber = formatPhoneNumber(phoneNumber);
-  
+
   if (!formattedNumber || formattedNumber.length < 12) {
-    console.log(`⚠️ Invalid phone number format: ${phoneNumber}`);
     return false;
   }
 
@@ -92,7 +87,6 @@ const sendSMS = async (phoneNumber, message) => {
 
   try {
     const response = await sms.send(options);
-    console.log(`✅ SMS sent to ${formattedNumber}`);
     return true;
   } catch (error) {
     console.error('❌ SMS sending failed:', error.message);
@@ -120,8 +114,7 @@ const sendBulkSMSWithDelay = async (recipients, messageGenerator, options = {}) 
   }
 
   if (!isConfigured || !sms) {
-    console.log(`⚠️ SMS service not configured. Would have sent to ${recipients.length} recipients.`);
-    return { total: recipients.length, sent: 0, failed: recipients.length, errors: ['SMS service not configured'] };
+        return { total: recipients.length, sent: 0, failed: recipients.length, errors: ['SMS service not configured'] };
   }
 
   const results = {
@@ -157,16 +150,14 @@ const sendBulkSMSWithDelay = async (recipients, messageGenerator, options = {}) 
     batches.push(validRecipients.slice(i, i + batchSize));
   }
 
-  console.log(`📱 Sending SMS to ${validRecipients.length} recipients in ${batches.length} batches (${batchSize} per batch)`);
 
   for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
     const batch = batches[batchIndex];
-    console.log(`📦 Processing batch ${batchIndex + 1}/${batches.length} (${batch.length} messages)...`);
 
     // Process each SMS in the batch with individual delays
     for (let i = 0; i < batch.length; i++) {
       const recipient = batch[i];
-      
+
       // Generate personalized message if needed
       const message = typeof messageGenerator === 'function'
         ? messageGenerator(recipient)
@@ -188,14 +179,13 @@ const sendBulkSMSWithDelay = async (recipients, messageGenerator, options = {}) 
           status: 'sent',
           timestamp: new Date().toISOString()
         });
-        
-        console.log(`✅ [${batchIndex + 1}/${batches.length}] SMS sent to ${recipient.name || recipient.formattedNumber} (${results.sent}/${validRecipients.length})`);
-        
+
+
         // Delay between individual SMS (within same batch)
         if (i < batch.length - 1 && delayBetweenSMS > 0) {
           await new Promise(resolve => setTimeout(resolve, delayBetweenSMS));
         }
-        
+
       } catch (error) {
         results.failed++;
         results.errors.push(`Failed for ${recipient.phoneNumber}: ${error.message}`);
@@ -224,13 +214,11 @@ const sendBulkSMSWithDelay = async (recipients, messageGenerator, options = {}) 
 
     // Delay between batches (except after the last batch)
     if (batchIndex < batches.length - 1 && delayBetweenBatches > 0) {
-      console.log(`⏳ Waiting ${delayBetweenBatches / 1000} seconds before next batch...`);
-      await new Promise(resolve => setTimeout(resolve, delayBetweenBatches));
+            await new Promise(resolve => setTimeout(resolve, delayBetweenBatches));
     }
   }
 
-  console.log(`📱 Bulk SMS completed: ${results.sent}/${results.total} sent, ${results.failed} failed`);
-  return results;
+    return results;
 };
 
 /**
@@ -272,8 +260,7 @@ const sendBulkPaymentNotification = async (members, paymentType, organizationNam
     }));
 
   if (recipients.length === 0) {
-    console.log('📱 No members with valid phone numbers found');
-    return { total: 0, sent: 0, failed: 0, errors: ['No valid phone numbers'] };
+        return { total: 0, sent: 0, failed: 0, errors: ['No valid phone numbers'] };
   }
 
   // Message generator function for personalization
@@ -309,14 +296,13 @@ const sendBulkPaymentNotification = async (members, paymentType, organizationNam
  */
 const sendMemberCredentials = async (member) => {
   const { name, phoneNumber, email, password, organizationName } = member;
-  
+
   if (!phoneNumber) {
-    console.log(`⚠️ No phone number for member: ${email}. Skipping SMS.`);
     return false;
   }
 
   const frontendUrl = process.env.FRONTEND_URL || 'https://finlightv2.web.app';
-  
+
   const message = `Welcome to FinLight, ${name}! 🎉\n\n` +
     `Your account has been created for ${organizationName || 'your organization'}.\n\n` +
     `📧 Email: ${email}\n` +
@@ -327,7 +313,7 @@ const sendMemberCredentials = async (member) => {
 
   // Truncate message if too long (SMS limit is 1600 characters)
   const truncatedMessage = message.length > 1600 ? message.substring(0, 1597) + '...' : message;
-  
+
   return await sendSMS(phoneNumber, truncatedMessage);
 };
 
@@ -338,7 +324,7 @@ const sendMemberCredentials = async (member) => {
  */
 const sendPaymentConfirmation = async (paymentDetails) => {
   const { memberName, phoneNumber, amount, paymentType, reference } = paymentDetails;
-  
+
   if (!phoneNumber) return false;
 
   const message = `Payment Confirmation ✓\n\n` +
@@ -358,11 +344,11 @@ const sendPaymentConfirmation = async (paymentDetails) => {
  */
 const sendPaymentReminder = async (reminderDetails) => {
   const { memberName, phoneNumber, amount, paymentType, dueDate } = reminderDetails;
-  
+
   if (!phoneNumber) return false;
 
   const dueDateFormatted = dueDate ? new Date(dueDate).toLocaleDateString('en-NG') : 'soon';
-  
+
   const message = `Payment Reminder ⏰\n\n` +
     `Dear ${memberName},\n` +
     `Your ${paymentType} payment of ₦${amount.toLocaleString()} is due on ${dueDateFormatted}.\n\n` +
@@ -385,7 +371,7 @@ const sendBulkSMS = async (recipients, message) => {
   }
 
   const messageGenerator = () => message;
-  
+
   return await sendBulkSMSWithDelay(recipients, messageGenerator, {
     batchSize: 20,
     delayBetweenBatches: 3000,

@@ -205,7 +205,6 @@ const handlePartialPayment = async (originalPayment, amountPaid, reference, note
     const newTotalNetReceived = previousNetReceived + netToOrg;
     const remainingTarget = targetAmount - newTotalNetReceived;
 
-    console.log(`Partial payment: Target ${targetAmount}, Paid ${amountPaid}, Net to org ${netToOrg}, Remaining target ${remainingTarget}`);
 
     // Update original payment
     originalPayment.totalPaidSoFar = (originalPayment.totalPaidSoFar || 0) + amountPaid;
@@ -238,7 +237,6 @@ const handlePartialPayment = async (originalPayment, amountPaid, reference, note
                 parentPayment.status = 'paid';
                 parentPayment.paidAt = new Date();
                 await parentPayment.save();
-                console.log(`✅ Parent payment ${parentPayment._id} marked as paid`);
             }
         }
     }
@@ -285,7 +283,6 @@ const handlePartialPayment = async (originalPayment, amountPaid, reference, note
                 periodKey: originalPayment.periodKey
             });
         }
-        console.log(`Outstanding payment record: ${outstandingPayment._id} for amount ${remainingTarget}`);
     }
 
     // Record Income for net amount received by organisation
@@ -348,7 +345,6 @@ exports.createAdminDirectPayment = async (req, res, next) => {
         const { userId, type, amount, dueDate, description, paymentTypeId, paidAt } = req.body;
         const organizationId = req.user.organizationId;
 
-        console.log('Admin direct payment request:', req.body);
 
         if (!userId) {
             return res.status(400).json({ success: false, message: 'User ID is required' });
@@ -536,12 +532,10 @@ exports.markFineAsPaid = async (req, res, next) => {
 // @route   POST /api/payments
 // @access  Private/Admin
 exports.createPayment = async (req, res, next) => {
-    console.log('🔥🔥🔥 Admin createPayment WAS CALLED! 🔥🔥🔥');
     try {
         const { userId, name, type, amount, dueDate, description, paymentTypeId, periodStart, periodEnd, periodKey } = req.body;
         const organizationId = req.user.organizationId;
 
-        console.log('Create payment request:', { userId, name, type, amount, dueDate, description, paymentTypeId, organizationId, periodStart, periodEnd, periodKey });
 
         if (!userId || !name || !type || !amount || amount <= 0) {
             return res.status(400).json({ success: false, message: 'Missing required fields' });
@@ -987,7 +981,6 @@ exports.getUserPayments = async (req, res, next) => {
 exports.getAllPayments = async (req, res, next) => {
     try {
         const organizationId = req.user.organizationId;
-        console.log('Getting all payments for organization:', organizationId);
 
         if (!organizationId && !['super-admin', 'super_admin'].includes(req.user.role)) {
             return res.status(400).json({ success: false, message: 'Organization ID not found for this user' });
@@ -1922,8 +1915,7 @@ exports.getPaymentStats = async (req, res, next) => {
 // controllers/paymentController.js - Updated createMemberPayment with Strict Full Payment
 
 exports.createMemberPayment = async (req, res, next) => {
-    console.log('🔥🔥🔥 createMemberPayment WAS CALLED! 🔥🔥🔥');
-    console.log('Request body:', req.body);
+
     try {
         const {
             name,
@@ -1973,7 +1965,6 @@ exports.createMemberPayment = async (req, res, next) => {
                     message: 'Please select at least one month for dues payment'
                 });
             }
-            console.log(`📅 Dues payment for months: ${months.join(', ')} (${months.length} months)`);
         }
 
         // ============================================================
@@ -1986,10 +1977,8 @@ exports.createMemberPayment = async (req, res, next) => {
             penaltyInfo = calculateLatePenalties(paymentType, new Date(), penaltyMonths);
 
             if (penaltyInfo.isLate) {
-                console.log(`⚠️ Late penalty applied: ₦${penaltyInfo.totalPenalty}`);
                 if (isDuesPayment && penaltyInfo.breakdown.length > 0) {
                     penaltyInfo.breakdown.filter(b => b.isLate).forEach(b => {
-                        console.log(`   ${b.month}: ₦${b.penalty} penalty`);
                     });
                 }
             }
@@ -2066,8 +2055,6 @@ exports.createMemberPayment = async (req, res, next) => {
         // IF EXISTING PAYMENT FOUND - ADD MONTHS (ONLY FOR DUES)
         // ============================================================
         if (existingPayment) {
-            console.log(`📝 Adding ${months.length} month(s) to existing payment: ${existingPayment._id}`);
-
             const existingMonths = existingPayment.months || [];
             const newMonths = months.filter(m => !existingMonths.includes(m));
 
@@ -2118,9 +2105,6 @@ exports.createMemberPayment = async (req, res, next) => {
             existingPayment.transactionReference = `PAY-${existingPayment._id}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
             await existingPayment.save();
-
-            console.log(`✅ Payment updated with ${newMonths.length} new month(s). Total: ${allMonths.length} months`);
-            console.log(`💰 Expected amount: ₦${existingPayment.expectedAmount}`);
 
             return res.status(200).json({
                 success: true,
@@ -2180,12 +2164,7 @@ exports.createMemberPayment = async (req, res, next) => {
 
         const payment = await Payment.create(paymentData);
 
-        console.log(`✅ Payment created with reference: ${payment.transactionReference}`);
-        console.log(`📝 Type: ${payment.type}`);
-        console.log(`💰 Base amount: ₦${payment.amount}`);
-        console.log(`⚠️ Penalty: ₦${payment.penaltyAmount || 0}`);
-        console.log(`💰 Total amount: ₦${payment.amount + (payment.penaltyAmount || 0)}`);
-        console.log(`💰 Expected amount (with fees): ₦${payment.expectedAmount}`);
+
 
         // ============================================================
         // RESPONSE

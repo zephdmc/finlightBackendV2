@@ -1,4 +1,4 @@
-// backend/src/controllers/TransactionController.js
+﻿// backend/src/controllers/TransactionController.js
 const Income = require('../models/Income');
 const Expenditure = require('../models/Expenditure');
 const Payment = require('../models/Payment');
@@ -40,7 +40,7 @@ const getTotalPaymentAmount = (payment) => {
 /**
  * Transaction Controller - Handles income and expenditure operations
  * Manages all financial transactions in the system
- * Now fully multi‑tenant: all operations are scoped to the authenticated user's organization.
+ * Now fully multiâ€‘tenant: all operations are scoped to the authenticated user's organization.
  */
 class TransactionController {
   /**
@@ -97,15 +97,15 @@ class TransactionController {
         source,
         description: description || '',
         createdBy: req.user.id,
-        organizationId: organizationId,  // ✅ Always set this
+        organizationId: organizationId,  // âœ… Always set this
         type: 'manual',
         date: new Date()
       });
 
       await notifyOrganization({
         organizationId,
-        title: 'income Recorded 🔔',
-        message: `${income.description} - ₦${income.amount} has been recorded.`,
+        title: 'income Recorded ðŸ””',
+        message: `${income.description} - â‚¦${income.amount} has been recorded.`,
         type: 'payment',
         metadata: {
           description: description
@@ -187,13 +187,13 @@ class TransactionController {
         description: description || '',
         receipt: receipt || null,
         createdBy: req.user.id,
-        organizationId: organizationId,  // ✅ Always set this
+        organizationId: organizationId,  // âœ… Always set this
         date: new Date()
       });
       await notifyOrganization({
         organizationId,
-        title: 'Expenditure Recorded 🔔',
-        message: `${expenditure.description} - ₦${expenditure.amount} has been Recorded.`,
+        title: 'Expenditure Recorded ðŸ””',
+        message: `${expenditure.description} - â‚¦${expenditure.amount} has been Recorded.`,
         type: 'payment',
         metadata: {
           description: description
@@ -541,8 +541,8 @@ class TransactionController {
       await income.save();
       await notifyOrganization({
         organizationId,
-        title: 'Income Updated 🔔',
-        message: `${income.description} - ₦${income.amount} has been Updated.`,
+        title: 'Income Updated ðŸ””',
+        message: `${income.description} - â‚¦${income.amount} has been Updated.`,
         type: 'payment',
         metadata: {
           description: description
@@ -644,8 +644,8 @@ class TransactionController {
       await expenditure.save();
       await notifyOrganization({
         organizationId,
-        title: 'Exxpenditure Updated 🔔',
-        message: `${expenditure.description} - ₦${expenditure.amount} has been Updated.`,
+        title: 'Exxpenditure Updated ðŸ””',
+        message: `${expenditure.description} - â‚¦${expenditure.amount} has been Updated.`,
         type: 'payment',
         metadata: {
           description: description
@@ -703,8 +703,8 @@ class TransactionController {
       await income.deleteOne();
       await notifyOrganization({
         organizationId,
-        title: 'Income Deleted 🔔',
-        message: `${income.description} - ₦${income.amount} has been deleted.`,
+        title: 'Income Deleted ðŸ””',
+        message: `${income.description} - â‚¦${income.amount} has been deleted.`,
         type: 'payment',
         metadata: {
           description: description
@@ -756,8 +756,8 @@ class TransactionController {
 
       await notifyOrganization({
         organizationId,
-        title: 'Expenditure Deleted 🔔',
-        message: `${expenditure.purpose} - ₦${expenditure.amount} has been Deleted.`,
+        title: 'Expenditure Deleted ðŸ””',
+        message: `${expenditure.purpose} - â‚¦${expenditure.amount} has been Deleted.`,
         type: 'payment',
         metadata: {
           description: description
@@ -812,7 +812,7 @@ class TransactionController {
         { $group: { _id: null, total: { $sum: '$amount' } } }
       ]);
 
-      // ⭐ Total income = manual income + payment income (including penalties)
+      // â­ Total income = manual income + payment income (including penalties)
       const totalIncome = (manualIncome[0]?.total || 0) + totalPaymentIncome;
 
 
@@ -912,13 +912,13 @@ class TransactionController {
         matchCondition = { organizationId: new mongoose.Types.ObjectId(organizationId) };
       }
 
-      // ⭐ Get all paid payments to calculate total with penalties
+      // â­ Get all paid payments to calculate total with penalties
       const paidPayments = await Payment.find({
         ...matchCondition,
         status: 'paid'
       });
 
-      // ⭐ Calculate total payment amount including penalties
+      // â­ Calculate total payment amount including penalties
       let totalPaymentIncome = 0;
       paidPayments.forEach(payment => {
         totalPaymentIncome += getTotalPaymentAmount(payment);
@@ -930,7 +930,7 @@ class TransactionController {
         { $group: { _id: null, total: { $sum: '$amount' } } }
       ]);
 
-      // ⭐ Total income = manual income + payment income (including penalties)
+      // â­ Total income = manual income + payment income (including penalties)
       const totalIncome = (manualIncome[0]?.total || 0) + totalPaymentIncome;
 
 
@@ -961,7 +961,7 @@ class TransactionController {
   };
 
   /**
-   * Get total income (including payments) – scoped to organization
+   * Get total income (including payments) â€“ scoped to organization
    * @route GET /api/transactions/total-income
    * @access Private/Admin
    */
@@ -983,13 +983,13 @@ class TransactionController {
       }
 
 
-      // ⭐ Get all paid payments to calculate total with penalties
+      // â­ Get all paid payments to calculate total with penalties
       const paidPayments = await Payment.find({
         ...matchCondition,
         status: 'paid'
       });
 
-      // ⭐ Calculate total payment amount including penalties
+      // â­ Calculate total payment amount including penalties
       let totalPaymentIncome = 0;
       paidPayments.forEach(payment => {
         totalPaymentIncome += getTotalPaymentAmount(payment);
@@ -1094,12 +1094,11 @@ class TransactionController {
         ])
       ]);
 
-      console.log(`Found ${incomes.length} income records for organization ${organizationId}`);
 
       res.status(200).json({
         success: true,
         data: {
-          records: incomes,  // ← Wrap in records property
+          records: incomes,  // â† Wrap in records property
           summary: {
             total: totalAmount[0]?.total || 0,
             count: total
@@ -1170,7 +1169,6 @@ class TransactionController {
         ])
       ]);
 
-      console.log(`Found ${expenditures.length} expenditure records for organization ${organizationId}`);
 
       res.status(200).json({
         success: true,

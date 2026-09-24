@@ -24,10 +24,9 @@ class Database {
       };
 
       await mongoose.connect(process.env.MONGODB_URI, options);
-      
+
       this.isConnected = true;
-      console.log('✅ MongoDB Connected Successfully');
-      
+
       // Handle connection events
       mongoose.connection.on('error', (err) => {
         console.error('❌ MongoDB connection error:', err);
@@ -41,8 +40,7 @@ class Database {
       });
 
       mongoose.connection.on('reconnected', () => {
-        console.log('✅ MongoDB reconnected');
-        this.isConnected = true;
+                this.isConnected = true;
       });
 
     } catch (error) {
@@ -55,8 +53,7 @@ class Database {
     if (this.retryCount < this.maxRetries) {
       this.retryCount++;
       const delay = Math.min(1000 * Math.pow(2, this.retryCount), 30000);
-      console.log(`Retrying connection in ${delay/1000} seconds... (Attempt ${this.retryCount}/${this.maxRetries})`);
-      
+
       setTimeout(() => {
         this.connect();
       }, delay);
@@ -78,8 +75,7 @@ class Database {
     try {
       await mongoose.disconnect();
       this.isConnected = false;
-      console.log('✅ MongoDB disconnected successfully');
-    } catch (error) {
+          } catch (error) {
       console.error('❌ Error disconnecting MongoDB:', error);
     }
   }

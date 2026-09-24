@@ -574,8 +574,7 @@ router.get(
 
       // Authorization: admin OR requesting own data
       if (req.user.role !== 'admin' && requestingUserId !== targetUserId) {
-        console.log(`Authorization failed: User ${requestingUserId} (role: ${req.user.role}) tried to access ${targetUserId}`);
-        return res.status(403).json({
+                return res.status(403).json({
           success: false,
           message: 'Not authorized to view this payment summary'
         });
@@ -763,7 +762,6 @@ router.post(
       await user.save();
 
       // Log the manual verification
-      console.log(`Admin ${req.user.email} manually verified registration for user ${user.email}`);
 
       res.status(200).json({
         success: true,

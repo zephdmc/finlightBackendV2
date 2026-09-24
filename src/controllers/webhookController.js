@@ -11,13 +11,13 @@ const calculatePaystackFee = (amount) => {
   const fixedFee = 100; // ₦100 for amounts >= ₦2,500
   const threshold = 2500;
   const maxFee = 2000;
-  
+
   let fee = (amount * percentage) / 100;
-  
+
   if (amount >= threshold) {
     fee += fixedFee;
   }
-  
+
   return Math.min(fee, maxFee);
 };
 
@@ -96,7 +96,6 @@ exports.handlePaystackWebhook = async (req, res, next) => {
     const paystackFee = fees / 100;
     const organizationId = metadata?.organizationId;
 
-    console.log(`📨 Webhook received: ₦${amountPaid} for reference ${reference}`);
 
     // Find payment by transaction reference
     let payment = await Payment.findOne({ transactionReference: reference });
@@ -122,18 +121,12 @@ exports.handlePaystackWebhook = async (req, res, next) => {
     }
 
     const expectedAmount = payment.expectedAmount || payment.amount;
-    
+
     // ✅ Calculate platform fee (4% of after-Paystack amount)
     const afterPaystack = amountPaid - paystackFee;
     const platformFee = afterPaystack * 0.04;
     const netToOrg = afterPaystack - platformFee;
-    
-    console.log(`💰 Transaction breakdown:`);
-    console.log(`   Amount paid: ₦${amountPaid}`);
-    console.log(`   Paystack fee: ₦${paystackFee.toFixed(2)}`);
-    console.log(`   After Paystack: ₦${afterPaystack.toFixed(2)}`);
-    console.log(`   Platform fee (4%): ₦${platformFee.toFixed(2)}`);
-    console.log(`   Organization receives: ₦${netToOrg.toFixed(2)}`);
+
 
     // Handle partial payment
     if (amountPaid < expectedAmount) {
@@ -159,8 +152,7 @@ exports.handlePaystackWebhook = async (req, res, next) => {
         }
       });
 
-      console.log(`⚠️ Partial payment processed. Remaining: ₦${expectedAmount - amountPaid}`);
-    } else {
+          } else {
       // Full payment
       payment.status = 'paid';
       payment.paidAmount = amountPaid;
@@ -194,8 +186,7 @@ exports.handlePaystackWebhook = async (req, res, next) => {
         }
       });
 
-      console.log(`✅ Full payment processed for ${payment._id}`);
-    }
+          }
 
     // If this was a registration payment, update user's registration status
     if (payment.type === 'registration') {

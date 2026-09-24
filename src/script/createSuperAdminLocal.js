@@ -1,4 +1,4 @@
-﻿const mongoose = require('mongoose');
+const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 
 // Use local MongoDB (make sure MongoDB is running locally)
@@ -21,7 +21,7 @@ const userSchema = new mongoose.Schema({
   organizationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Organization' },
   createdAt: { type: Date, default: Date.now }
 });
-userSchema.pre('save', async function(next) {
+userSchema.pre('save', async function (next) {
   if (!this.isModified('password')) return next();
   const salt = await bcrypt.genSalt(10);
   this.password = await bcrypt.hash(this.password, salt);
@@ -32,7 +32,6 @@ const User = mongoose.model('User', userSchema);
 async function init() {
   try {
     await mongoose.connect(MONGODB_URI);
-    console.log('✅ Connected to local MongoDB');
 
     let platformOrg = await Organization.findOne({ slug: 'finlight' });
     if (!platformOrg) {
@@ -41,10 +40,8 @@ async function init() {
         slug: 'finlight',
         paystack: { subaccountCode: 'PLATFORM_MASTER' }
       });
-      console.log('🏢 Platform organization created');
-    } else {
-      console.log('🏢 Platform organization already exists');
-    }
+          } else {
+          }
 
     const existingSuper = await User.findOne({ email: 'super@finlight.com' });
     if (!existingSuper) {
@@ -56,15 +53,12 @@ async function init() {
         role: 'super_admin',
         organizationId: platformOrg._id
       });
-      console.log('👑 Super admin created: super@finlight.com / SuperAdmin123!');
-    } else {
-      console.log('👑 Super admin already exists');
-    }
+          } else {
+          }
 
-    console.log('🎉 Done!');
-    process.exit(0);
+        process.exit(0);
   } catch (err) {
-    console.error('❌ Error:', err);
+    console.error('? Error:', err);
     process.exit(1);
   }
 }

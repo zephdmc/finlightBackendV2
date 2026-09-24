@@ -1,4 +1,4 @@
-// backend/src/controllers/UserController.js
+﻿// backend/src/controllers/UserController.js
 const User = require('../models/User');
 const Payment = require('../models/Payment');
 const bcrypt = require('bcryptjs');
@@ -9,7 +9,7 @@ const { addToEmailQueue } = require('../services/emailQueue');
 /**
  * User Controller - Handles all user management operations
  * Manages member registration, profile updates, and user listings
- * Now fully multi‑tenant: each user belongs to an organization (except super-admin)
+ * Now fully multiâ€‘tenant: each user belongs to an organization (except super-admin)
  */
 class UserController {
   /**
@@ -39,7 +39,7 @@ class UserController {
   }
 
   /**
-   * Get all users (members only for non-admin) – scoped to organization
+   * Get all users (members only for non-admin) â€“ scoped to organization
    * Super admin sees all users across all organizations
    * @route GET /api/users
    * @access Private
@@ -49,16 +49,11 @@ class UserController {
       const userRole = req.user.role;
       const { page = 1, limit = 20, role, search } = req.query;
 
-      console.log('=== getAllUsers Debug ===');
-      console.log('User Role:', userRole);
-      console.log('OrganizationId:', req.user.organizationId);
-      console.log('Query params:', { page, limit, role, search });
 
       let query = {};
 
       // Super admin sees all users
       if (userRole === 'super-admin' || userRole === 'super_admin') {
-        console.log('Super admin - no organization filter');
         if (role) query.role = role;
       }
       // Regular admin sees only their organization's users
@@ -74,7 +69,6 @@ class UserController {
         }
 
         query.organizationId = organizationId;
-        console.log('Admin - filtering by organization:', organizationId.toString());
 
         // If not admin role (like member), only show members
         if (userRole !== 'admin') {
@@ -91,10 +85,8 @@ class UserController {
           { email: { $regex: search, $options: 'i' } },
           { phoneNumber: { $regex: search, $options: 'i' } } // Added phoneNumber search
         ];
-        console.log('Search query:', search);
       }
 
-      console.log('Final query:', JSON.stringify(query, null, 2));
 
       const skip = (parseInt(page) - 1) * parseInt(limit);
       const limitNum = parseInt(limit);
@@ -110,7 +102,6 @@ class UserController {
         User.countDocuments(query)
       ]);
 
-      console.log(`Found ${users.length} users out of ${total} total`);
 
       // Get payment status for members (only if needed)
       const usersWithPaymentStatus = await Promise.all(
@@ -163,7 +154,7 @@ class UserController {
   }
 
   /**
-   * Get single user by ID – scoped to organization
+   * Get single user by ID â€“ scoped to organization
    * @route GET /api/users/:id
    * @access Private
    */
@@ -227,7 +218,7 @@ class UserController {
   };
 
   /**
-   * Register new member (Admin only) – scoped to organization
+   * Register new member (Admin only) â€“ scoped to organization
    * @route POST /api/users/register
    * @access Private/Admin
    */
@@ -276,7 +267,7 @@ class UserController {
       // Get organization name for the message
       const organization = await Organization.findById(organizationId);
       // const organizationName = organization ? organization.name : 'your organization';
-      // ✅ QUEUE the email instead of sending directly
+      // âœ… QUEUE the email instead of sending directly
       const loginUrl = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/login`;
       addToEmailQueue({
         name: `member-welcome-${user._id}-${Date.now()}`,
@@ -284,7 +275,6 @@ class UserController {
         retryDelay: 2000,
         task: async () => {
           await sendMemberWelcomeEmail(user.email, user.name, organization.name, loginUrl, password);
-          console.log(`✅ Welcome email sent to ${user.email}`);
         }
       });
 
@@ -306,7 +296,7 @@ class UserController {
 
 
 
-      // ✅ CORRECTED RESPONSE - No extra 'data' wrapper
+      // âœ… CORRECTED RESPONSE - No extra 'data' wrapper
       res.status(201).json({
         success: true,
         user: {
@@ -327,7 +317,7 @@ class UserController {
   };
 
   /**
-   * Update user profile – scoped to organization
+   * Update user profile â€“ scoped to organization
    * @route PUT /api/users/:id
    * @access Private
    */
@@ -385,7 +375,6 @@ class UserController {
         retryDelay: 2000,
         task: async () => {
           await sendMemberWelcomeEmail(user.email, user.name, organization.name, loginUrl, password);
-          console.log(`✅ Welcome email sent to ${user.email}`);
         }
       });
 
@@ -407,7 +396,7 @@ class UserController {
   }
 
   /**
-   * Delete user – scoped to organization
+   * Delete user â€“ scoped to organization
    * @route DELETE /api/users/:id
    * @access Private/Admin
    */
@@ -466,7 +455,7 @@ class UserController {
   }
 
   /**
-   * Get user statistics – scoped to organization
+   * Get user statistics â€“ scoped to organization
    * @route GET /api/users/stats
    * @access Private/Admin
    */
@@ -525,7 +514,7 @@ class UserController {
   }
 
   /**
-   * Bulk import members (Admin only) – scoped to organization
+   * Bulk import members (Admin only) â€“ scoped to organization
    * @route POST /api/users/bulk-import
    * @access Private/Admin
    */
@@ -598,7 +587,7 @@ class UserController {
   }
 
   /**
-   * Reset user password – scoped to organization
+   * Reset user password â€“ scoped to organization
    * @route POST /api/users/:id/reset-password
    * @access Private/Admin
    */
@@ -651,7 +640,7 @@ class UserController {
   }
 
   /**
-   * Get member payment summary (for dashboard) – scoped to organization
+   * Get member payment summary (for dashboard) â€“ scoped to organization
    * @route GET /api/users/:id/payment-summary
    * @access Private
    */

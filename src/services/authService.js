@@ -1,4 +1,4 @@
-const User = require('../models/User');
+﻿const User = require('../models/User');
 const Payment = require('../models/Payment');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
@@ -171,20 +171,18 @@ class AuthService {
    * @returns {Promise<Object>} - Reset token (only in development)
    */
   async requestPasswordReset(email) {
-    console.log(`📧 Password reset requested for: ${email}`);
 
     // Always return success for security (don't reveal if email exists)
     const user = await User.findOne({ email });
 
     if (!user) {
-      console.log(`⚠️ Password reset requested for non-existent email: ${email}`);
       return { success: true };
     }
 
     // Generate secure reset token
     const resetToken = crypto.randomBytes(32).toString('hex');
 
-    // 🔐 SECURITY FIX: Hash the token before storing in database
+    // ðŸ” SECURITY FIX: Hash the token before storing in database
     const hashedToken = crypto
       .createHash('sha256')
       .update(resetToken)
@@ -201,7 +199,6 @@ class AuthService {
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
     const resetUrl = `${frontendUrl}/reset-password?token=${resetToken}`;
 
-    console.log(`🔗 Reset URL: ${resetUrl}`);
 
     // Send email using Brevo
     const emailSent = await sendPasswordResetEmail(
@@ -211,10 +208,9 @@ class AuthService {
     );
 
     if (!emailSent) {
-      console.error(`❌ Failed to send password reset email to ${email}`);
+      console.error(`âŒ Failed to send password reset email to ${email}`);
       // Don't throw error - user will still get success message
     } else {
-      console.log(`✅ Password reset email sent to ${email}`);
     }
 
     // Return token only in development for testing
@@ -236,7 +232,6 @@ class AuthService {
    * @returns {Promise<boolean>} - Success status
    */
   async resetPassword(token, newPassword) {
-    console.log(`🔐 Attempting password reset with token: ${token?.substring(0, 10)}...`);
 
     // Validate password
     if (!newPassword || newPassword.length < 6) {
@@ -245,7 +240,7 @@ class AuthService {
       throw error;
     }
 
-    // 🔐 Hash the incoming token to compare with stored hash
+    // ðŸ” Hash the incoming token to compare with stored hash
     const hashedToken = crypto
       .createHash('sha256')
       .update(token)
@@ -258,13 +253,11 @@ class AuthService {
     });
 
     if (!user) {
-      console.log(`❌ Invalid or expired reset token used`);
       const error = new Error('Invalid or expired reset token. Please request a new password reset.');
       error.statusCode = 400;
       throw error;
     }
 
-    console.log(`✅ Found user for password reset: ${user.email}`);
 
     // Validate password strength
     const passwordStrength = this.validatePasswordStrength(newPassword);
@@ -280,7 +273,6 @@ class AuthService {
     user.resetPasswordExpires = undefined;
     await user.save();
 
-    console.log(`✅ Password reset successful for user: ${user.email}`);
 
     return true;
   }
@@ -359,7 +351,6 @@ class AuthService {
    * @param {string} token - Token to invalidate
    */
   async logout(token) {
-    console.log('🚪 Logout requested for token:', token?.substring(0, 20) + '...');
     return true;
   }
 

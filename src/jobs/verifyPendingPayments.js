@@ -6,7 +6,6 @@ const axios = require('axios');
 const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:5000';
 
 const verifyPendingPayments = async () => {
-  console.log(`[${new Date().toISOString()}] Running pending payment verification job...`);
 
   // Consider only payments older than 10 minutes to give webhook time
   const cutoff = new Date(Date.now() - 5 * 60 * 1000);
@@ -19,11 +18,9 @@ const verifyPendingPayments = async () => {
   }).limit(50);
 
   if (pendingPayments.length === 0) {
-    console.log('No pending payments to verify.');
-    return;
+        return;
   }
 
-  console.log(`Found ${pendingPayments.length} pending payments.`);
 
   for (const payment of pendingPayments) {
     try {
@@ -35,8 +32,7 @@ const verifyPendingPayments = async () => {
         // headers: { 'x-internal-key': process.env.INTERNAL_API_KEY }
       });
 
-      console.log(`✅ Payment ${payment._id} verified: ${response.data.data?.status || 'success'}`);
-    } catch (error) {
+          } catch (error) {
       console.error(`❌ Verification failed for ${payment._id}:`, error.message);
       // Log more details if needed
     }
@@ -46,7 +42,6 @@ const verifyPendingPayments = async () => {
 // Schedule the job: run every 10 minutes
 cron.schedule('*/10 * * * *', verifyPendingPayments);
 
-console.log('🕒 Pending payment verification cron job scheduled (every 10 minutes).');
 
 // Export for manual triggering (optional)
 module.exports = { verifyPendingPayments };

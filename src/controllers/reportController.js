@@ -1,4 +1,4 @@
-// backend/src/controllers/ReportController.js
+﻿// backend/src/controllers/ReportController.js
 const User = require('../models/User');
 const Payment = require('../models/Payment');
 const Income = require('../models/Income');
@@ -8,7 +8,7 @@ const mongoose = require('mongoose');
 /**
  * Report Controller - Handles all reporting functionality
  * Provides comprehensive financial and membership reports
- * Now fully multi‑tenant: every query is filtered by organizationId.
+ * Now fully multiâ€‘tenant: every query is filtered by organizationId.
  */
 class ReportController {
   /**
@@ -351,7 +351,7 @@ class ReportController {
   };
 
   /**
-   * Get member payment report (for specific member) – scoped to organization
+   * Get member payment report (for specific member) â€“ scoped to organization
    * @route GET /api/reports/member/:userId
    */
   getMemberPaymentReport = async (req, res, next) => {
@@ -431,7 +431,7 @@ class ReportController {
   };
 
   /**
-   * Get monthly financial summary (for charts) – scoped
+   * Get monthly financial summary (for charts) â€“ scoped
    * @route GET /api/reports/monthly-summary
    */
   getMonthlySummary = async (req, res, next) => {
@@ -674,7 +674,6 @@ class ReportController {
       const { type } = req.params;
       const { startDate, endDate } = req.query;
 
-      console.log('Export report - Type:', type, 'OrganizationId:', organizationId);
 
       let data = [];
       let headers = [];

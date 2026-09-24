@@ -15,8 +15,7 @@ axiosRetry(flwAxios, {
            (error.response && error.response.status >= 500);
   },
   onRetry: (retryCount, error, requestConfig) => {
-    console.log(`Retrying Flutterwave request (${retryCount}/3): ${error.message}`);
-  }
+      }
 });
 
 // Re‑assign the patched instance (depends on flutterwave-node-v3 internal)
@@ -32,8 +31,7 @@ async function withRetry(fn, maxRetries = 3) {
       const isRetryable = error.response?.status >= 500 || error.code === 'ECONNRESET';
       if (!isRetryable) throw error;
       const delay = Math.pow(2, i) * 1000;
-      console.log(`Flutterwave call failed, retrying in ${delay}ms... (${i+1}/${maxRetries})`);
-      await new Promise(resolve => setTimeout(resolve, delay));
+            await new Promise(resolve => setTimeout(resolve, delay));
     }
   }
   throw lastError;

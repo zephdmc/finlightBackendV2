@@ -1237,7 +1237,6 @@ const handlePartialPayment = async (originalPayment, amountPaid, reference, note
   const newTotalNetReceived = previousNetReceived + netToOrg;
   const remainingTarget = targetAmount - newTotalNetReceived;
 
-  console.log(`Partial payment: Target ${targetAmount}, Paid ${amountPaid}, Net to org ${netToOrg}, Remaining target ${remainingTarget}`);
 
   // Update original payment
   originalPayment.totalPaidSoFar = (originalPayment.totalPaidSoFar || 0) + amountPaid;
@@ -1298,8 +1297,7 @@ const handlePartialPayment = async (originalPayment, amountPaid, reference, note
         dueDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
       });
     }
-    console.log(`Outstanding payment record: ${outstandingPayment._id} for amount ${remainingTarget}`);
-  }
+      }
 
   // Record Income for net amount received by organisation
   await Income.create({
@@ -1361,7 +1359,6 @@ exports.createAdminDirectPayment = async (req, res, next) => {
     const { userId, type, amount, dueDate, description, paymentTypeId, paidAt } = req.body;
     const organizationId = req.user.organizationId;
 
-    console.log('Admin direct payment request:', req.body);
 
     if (!userId) {
       return res.status(400).json({ success: false, message: 'User ID is required' });
@@ -1532,7 +1529,6 @@ exports.createPayment = async (req, res, next) => {
     const { userId, name, type, amount, dueDate, description, paymentTypeId } = req.body;
     const organizationId = req.user.organizationId;
 
-    console.log('Create payment request:', { userId, name, type, amount, dueDate, description, paymentTypeId, organizationId });
 
     if (!userId || !name || !type || !amount || amount <= 0) {
       return res.status(400).json({ success: false, message: 'Missing required fields' });
@@ -1784,7 +1780,6 @@ exports.getUserPayments = async (req, res, next) => {
 exports.getAllPayments = async (req, res, next) => {
   try {
     const organizationId = req.user.organizationId;
-    console.log('Getting all payments for organization:', organizationId);
 
     if (!organizationId && !['super-admin', 'super_admin'].includes(req.user.role)) {
       return res.status(400).json({ success: false, message: 'Organization ID not found for this user' });
@@ -2181,7 +2176,6 @@ exports.createMemberPayment = async (req, res, next) => {
 
     });
 
-    console.log(`✅ Payment created with reference: ${payment.transactionReference}`);
 
     res.status(201).json({
       success: true,

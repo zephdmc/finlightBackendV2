@@ -831,7 +831,6 @@ class OrganizationController {
    */
   async getFlutterwaveBankCode(bankName) {
     try {
-      console.log('🔍 Fetching bank code from Flutterwave for:', bankName);
 
       // Try direct API call first (most reliable)
       const response = await axios.get('https://api.flutterwave.com/v3/banks/NG', {
@@ -844,7 +843,6 @@ class OrganizationController {
 
       if (response.data.status === 'success' && response.data.data) {
         const banks = response.data.data;
-        console.log(`✅ Fetched ${banks.length} banks from Flutterwave`);
 
         // Try exact match first
         let bank = banks.find(b =>
@@ -860,17 +858,14 @@ class OrganizationController {
         }
 
         if (bank) {
-          console.log('✅ Bank found:', bank.name, 'Code:', bank.code);
-          return bank.code;
+                    return bank.code;
         }
 
-        console.log('❌ Bank not found in Flutterwave list');
-        return null;
+                return null;
       }
 
       // Fallback to SDK method if API call fails
-      console.log('🔄 Falling back to SDK method...');
-      const sdkResponse = await flw.Bank.get_banks({ country: 'NG' });
+            const sdkResponse = await flw.Bank.get_banks({ country: 'NG' });
       // Try different SDK method names if needed
       if (!sdkResponse || sdkResponse.status !== 'success') {
         const sdkResponse2 = await flw.Bank.list({ country: 'NG' });
@@ -935,12 +930,10 @@ class OrganizationController {
       const code = bankCodeMap[normalizedName];
 
       if (code) {
-        console.log('✅ Using fallback bank code for:', bankName, 'Code:', code);
         return code;
       }
 
-      console.log('❌ No fallback code found for:', bankName);
-      return null;
+            return null;
     }
   }
 
@@ -963,7 +956,6 @@ class OrganizationController {
 
 
 
-      console.log('📤 Creating Flutterwave subaccount:', payload);
       const response = await flw.Subaccount.create(payload);
 
       if (response.status === 'success') {
@@ -1241,11 +1233,9 @@ class OrganizationController {
  */
   async updateBankDetails(req, res, next) {
     try {
-      console.log('=== UPDATE BANK DETAILS (Flutterwave) ===');
       const organizationId = req.user?.organizationId;
       const { bankName, bankCode, accountNumber, accountName } = req.body;
 
-      console.log('Request body:', { bankName, bankCode, accountNumber, accountName });
 
       // Validate required fields
       if (!organizationId) {
@@ -1285,7 +1275,6 @@ class OrganizationController {
       let finalBankCode = bankCode;
 
       if (!finalBankCode) {
-        console.log('No bank code provided, fetching from Flutterwave...');
         // Get Flutterwave bank code with retry
         let retries = 3;
         while (retries > 0 && !finalBankCode) {
@@ -1293,13 +1282,11 @@ class OrganizationController {
           if (!finalBankCode) {
             retries--;
             if (retries > 0) {
-              console.log(`Bank code fetch failed, retrying... (${3 - retries}/3)`);
               await new Promise(resolve => setTimeout(resolve, 1000));
             }
           }
         }
       } else {
-        console.log('Using bank code from frontend:', finalBankCode);
       }
 
       if (!finalBankCode) {
@@ -1326,8 +1313,7 @@ class OrganizationController {
           lastError = subaccountResult.error;
           createRetries--;
           if (createRetries > 0) {
-            console.log(`Subaccount creation failed, retrying... (${3 - createRetries}/3): ${lastError}`);
-            await new Promise(resolve => setTimeout(resolve, 2000));
+                        await new Promise(resolve => setTimeout(resolve, 2000));
           }
         }
       }
@@ -1355,7 +1341,6 @@ class OrganizationController {
       organization.updatedAt = new Date();
       await organization.save();
 
-      console.log(`✅ Flutterwave subaccount created: ${subaccountResult.subaccountId} for ${organization.name}`);
 
       res.status(200).json({
         success: true,

@@ -1,4 +1,4 @@
-const express = require('express');
+﻿const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const cookieParser = require('cookie-parser');
@@ -61,7 +61,6 @@ app.use(cors({
     if (allowedOrigins.indexOf(origin) !== -1) {
       callback(null, true);
     } else {
-      console.log('Blocked origin:', origin); // For debugging
       callback(null, true); // Still allow but log it
       // callback(new Error('Not allowed by CORS')); // Uncomment to block
     }
@@ -138,11 +137,9 @@ if (useSessionStore) {
       autoRemove: 'native',
       touchAfter: 24 * 3600 // lazy session update
     });
-    console.log('✅ Session store initialized with MongoDB');
-  } catch (error) {
-    console.error('❌ Failed to initialize session store:', error.message);
-    console.log('⚠️ Continuing without session store');
-  }
+      } catch (error) {
+    console.error('âŒ Failed to initialize session store:', error.message);
+      }
 }
 
 // Session middleware configuration

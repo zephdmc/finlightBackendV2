@@ -9,7 +9,6 @@ const createIndexes = async () => {
         await Notification.collection.createIndex(
             { organizationId: 1, createdAt: -1 }
         );
-        console.log('✅ Notification indexes created');
 
         // UserRead indexes
         await UserRead.collection.createIndex(
@@ -19,10 +18,8 @@ const createIndexes = async () => {
         await UserRead.collection.createIndex(
             { userId: 1, organizationId: 1, readAt: -1 }
         );
-        console.log('✅ UserRead indexes created');
 
-        console.log('All indexes created successfully');
-    } catch (error) {
+            } catch (error) {
         console.error('Error creating indexes:', error);
     } finally {
         mongoose.disconnect();

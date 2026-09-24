@@ -849,12 +849,10 @@ paymentSchema.statics.getDuesSummary = async function (userId, organizationId) {
 
 paymentSchema.post('save', function (doc) {
   if (doc.status === 'paid' && doc.paidAt) {
-    console.log(`Payment ${doc._id} marked as paid at ${doc.paidAt}`);
-  }
+      }
 });
 
 paymentSchema.post('remove', function (doc) {
-  console.log(`Payment ${doc._id} removed for user ${doc.user}`);
-});
+  });
 
 module.exports = mongoose.model('Payment', paymentSchema);

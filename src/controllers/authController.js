@@ -1,4 +1,4 @@
-// backend/src/controllers/authController.js
+﻿// backend/src/controllers/authController.js
 const User = require('../models/User');
 const Payment = require('../models/Payment');
 const Organization = require('../models/Organization');
@@ -12,7 +12,7 @@ const generateToken = (user) => {
   return jwt.sign(
     {
       id: user._id,
-      organizationId: user.organizationId,  // critical for multi‑tenancy
+      organizationId: user.organizationId,  // critical for multiâ€‘tenancy
       role: user.role
     },
     process.env.JWT_SECRET,
@@ -80,7 +80,7 @@ exports.register = async (req, res, next) => {
       isActive: true
     });
 
-    // ✅ QUEUE the email instead of sending directly
+    // âœ… QUEUE the email instead of sending directly
     const loginUrl = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/login`;
     addToEmailQueue({
       name: `member-welcome-${user._id}-${Date.now()}`,
@@ -88,11 +88,9 @@ exports.register = async (req, res, next) => {
       retryDelay: 2000,
       task: async () => {
         await sendMemberWelcomeEmail(user.email, user.name, organization.name, loginUrl, password);
-        console.log(`✅ Welcome email sent to ${user.email}`);
       }
     });
 
-    console.log(`📧 Member welcome email queued for ${user.email}`);
 
     if (user.role === 'member') {
       await Payment.create({
@@ -178,8 +176,6 @@ exports.login = async (req, res, next) => {
     }
 
     const { email, password } = req.body;
-    console.log("=== LOGIN ATTEMPT ===");
-    console.log("Email:", email);
 
     // Find user (email is unique only within organization, but globally we must find one)
     // Note: If the same email exists in multiple organizations, we need to decide.
@@ -187,13 +183,11 @@ exports.login = async (req, res, next) => {
     // If you want email per organization, change the index (email+organizationId unique)
     const user = await User.findOne({ email }).select('+password');
     if (!user) {
-      console.log("User not found for email:", email);
       return res.status(401).json({ success: false, message: 'Invalid credentials' });
     }
 
     const isMatch = await user.comparePassword(password);
     if (!isMatch) {
-      console.log("Password mismatch for user:", email);
       return res.status(401).json({ success: false, message: 'Invalid credentials' });
     }
 
@@ -225,8 +219,8 @@ exports.login = async (req, res, next) => {
  * @access  Public
  */
 exports.signupWithOrg = async (req, res, next) => {
-  let organization = null;   // ← hoisted
-  let user = null;           // ← hoisted
+  let organization = null;   // â† hoisted
+  let user = null;           // â† hoisted
   try {
     const { orgName, adminName, adminEmail, adminPassword } = req.body;
 
@@ -324,7 +318,7 @@ exports.signupWithOrg = async (req, res, next) => {
         }
       });
     } catch (emailErr) {
-      console.error('⚠️ Welcome email queue failed (non-fatal):', emailErr.message);
+      console.error('âš ï¸ Welcome email queue failed (non-fatal):', emailErr.message);
     }
     // Return user with phoneNumber
     res.status(201).json({
@@ -351,8 +345,7 @@ exports.signupWithOrg = async (req, res, next) => {
     if (organization && !user) {
       try {
         await Organization.findByIdAndDelete(organization._id);
-        console.log(`🧹 Rolled back orphan organization ${organization._id}`);
-      } catch (rollbackErr) {
+              } catch (rollbackErr) {
         console.error('Rollback failed:', rollbackErr.message);
       }
     }
@@ -473,7 +466,6 @@ exports.refreshToken = async (req, res, next) => {
 exports.logout = async (req, res, next) => {
   try {
     // Log logout event
-    console.log(`User logged out: ${req.user.email} from IP ${req.ip}`);
 
     // If using token blacklist, add token to blacklist here
     // const token = req.headers.authorization?.split(' ')[1];
@@ -525,7 +517,6 @@ exports.verifyAdminPin = async (req, res, next) => {
     }
 
     if (pin === validPin) {
-      console.log(`Admin PIN verified by ${req.user.email} (ID: ${req.user.id})`);
       if (req.session) req.session.pinAttempts = 0;
 
       res.status(200).json({
