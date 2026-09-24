@@ -19,7 +19,8 @@ class ValidationMiddleware {
         message: errors.array()[0]?.message || 'Validation failed',
         errors: errors.array().map(err => ({
           field: err.param,
-          message: err.msg
+          message: err.msg,
+          value: err.value,
         }))
       });
     }
