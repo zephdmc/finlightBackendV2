@@ -115,7 +115,11 @@ router.post('/',
     body('is_mandatory').optional().isBoolean(),
     body('frequency').optional().isIn(['one-time', 'weekly', 'monthly', 'quarterly', 'yearly']), // ← ADDED 'weekly'
     body('duration_value').optional().isInt({ min: 1, max: 365 }),
-    body('duration_unit').optional().isIn(['days', 'weeks', 'months', 'years'])
+    body('duration_unit').optional().isIn(['days', 'weeks', 'months', 'years']),
+    body('late_penalty_enabled').optional({ nullable: true }).isBoolean(),
+    body('late_penalty_type').optional({ nullable: true }).isIn(['fixed', 'percentage']),
+    body('late_penalty_value').optional({ nullable: true }).isFloat({ min: 0 }),
+    body('late_penalty_days_after').optional({ nullable: true }).isInt({ min: 1 }),
   ],
   ValidationMiddleware.validate,
   paymentTypeController.createPaymentType
@@ -152,28 +156,22 @@ router.post('/:id/generate-payments',
 );
 
 // Update payment type
-router.put('/:id',
-  roleCheck('admin'),
-  adminWriteLimiter,
-  ValidationMiddleware.idParam,
-  [
-    body('name').optional().trim().isLength({ min: 2, max: 100 })
-      .matches(/^[a-zA-Z0-9\s-]+$/),
-    body('type').optional().isIn(['dues', 'leavy', 'registration', 'monthly_dues', 'wedding_dues', 'charity_dues']),
-    body('description').optional().trim().isLength({ max: 500 }),
-    body('amount').optional().isFloat({ min: 0.01, max: 10000000 }),
-    body('is_mandatory').optional().isBoolean(),
-    // ============================================================
-    // FIX: Added 'weekly' and proper validation for recurring fields
-    // ============================================================
-    body('frequency').optional().isIn(['one-time', 'weekly', 'monthly', 'quarterly', 'yearly']),
-    body('duration_value').optional().isInt({ min: 1, max: 365 }),
-    body('duration_unit').optional().isIn(['days', 'weeks', 'months', 'years']),
-    body('isActive').optional().isBoolean()
-  ],
-  ValidationMiddleware.validate,
-  paymentTypeController.updatePaymentType
-);
+router.put('/:id', [
+  body('name').optional().trim().isLength({ min: 2, max: 100 })
+    .matches(/^[a-zA-Z0-9\s-]+$/),
+  body('type').optional().isIn(['dues', 'leavy', 'registration', 'monthly_dues', 'wedding_dues', 'charity_dues']),
+  body('description').optional().trim().isLength({ max: 500 }),
+  body('amount').optional().isFloat({ min: 0.01, max: 10000000 }),
+  body('is_mandatory').optional().isBoolean(),
+  body('frequency').optional().isIn(['one-time', 'weekly', 'monthly', 'quarterly', 'yearly']),
+  body('duration_value').optional({ nullable: true }).isInt({ min: 1, max: 365 }),   // ⭐ add nullable
+  body('duration_unit').optional({ nullable: true }).isIn(['days', 'weeks', 'months', 'years']),  // ⭐ add nullable
+  body('late_penalty_enabled').optional({ nullable: true }).isBoolean(),              // ⭐ new
+  body('late_penalty_type').optional({ nullable: true }).isIn(['fixed', 'percentage']), // ⭐ new
+  body('late_penalty_value').optional({ nullable: true }).isFloat({ min: 0 }),         // ⭐ new
+  body('late_penalty_days_after').optional({ nullable: true }).isInt({ min: 1 }),      // ⭐ new
+  body('isActive').optional().isBoolean()
+], ValidationMiddleware.validate, paymentTypeController.updatePaymentType);
 
 // Toggle status
 router.patch('/:id/status',
