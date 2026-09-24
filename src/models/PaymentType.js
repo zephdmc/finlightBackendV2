@@ -54,6 +54,7 @@ const PaymentTypeSchema = new mongoose.Schema({
     },
     default: 'one-time'
   },
+
   duration_value: {
     type: Number,
     min: [1, 'Duration value must be at least 1'],
@@ -63,22 +64,45 @@ const PaymentTypeSchema = new mongoose.Schema({
         return value && value > 0;
       },
       message: 'Duration value is required for recurring payments'
-    }
+    },
+    default: null
   },
   duration_unit: {
     type: String,
-    enum: {
-      values: ['days', 'weeks', 'months', 'years'],
-      message: 'Duration unit must be one of: days, weeks, months, years'
-    },
     validate: {
       validator: function (value) {
-        if (this.frequency === 'one-time') return true;
+        if (this.frequency === 'one-time') return true;   // ⭐ skip when one-time
         return value && ['days', 'weeks', 'months', 'years'].includes(value);
       },
       message: 'Duration unit is required for recurring payments'
-    }
+    },
+    default: null
   },
+  // duration_value: {
+  //   type: Number,
+  //   min: [1, 'Duration value must be at least 1'],
+  //   validate: {
+  //     validator: function (value) {
+  //       if (this.frequency === 'one-time') return true;
+  //       return value && value > 0;
+  //     },
+  //     message: 'Duration value is required for recurring payments'
+  //   }
+  // },
+  // duration_unit: {
+  //   type: String,
+  //   enum: {
+  //     values: ['days', 'weeks', 'months', 'years'],
+  //     message: 'Duration unit must be one of: days, weeks, months, years'
+  //   },
+  //   validate: {
+  //     validator: function (value) {
+  //       if (this.frequency === 'one-time') return true;
+  //       return value && ['days', 'weeks', 'months', 'years'].includes(value);
+  //     },
+  //     message: 'Duration unit is required for recurring payments'
+  //   }
+  // },
   isActive: {
     type: Boolean,
     default: true,
