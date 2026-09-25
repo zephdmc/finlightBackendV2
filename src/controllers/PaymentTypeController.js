@@ -635,7 +635,7 @@ exports.updatePaymentType = async (req, res, next) => {
       return res.status(400).json({
         success: false,
         code: 'PAYMENT_TYPE_IN_USE',
-        message: `Cannot edit "${req.params.id}". ${paymentsCount} member payment(s) already reference this type. You can only activate/deactivate it.`,
+        message: `Cannot edit. ${paymentsCount} member payment(s) already reference this type. You can only activate/deactivate it.`,
         paymentsCount,
       });
     }
