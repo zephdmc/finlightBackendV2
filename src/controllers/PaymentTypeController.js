@@ -28,7 +28,7 @@ const sendPaymentTypeNotifications = async (paymentType, organizationId, organiz
     );
 
     if (members.length === 0) {
-            return { total: 0, sent: 0, failed: 0 };
+      return { total: 0, sent: 0, failed: 0 };
     }
 
 
@@ -60,7 +60,7 @@ const sendPaymentTypeNotifications = async (paymentType, organizationId, organiz
       }
     }
 
-        return { total: members.length, sent, failed };
+    return { total: members.length, sent, failed };
 
   } catch (error) {
     console.error('❌ Error sending payment type notifications:', error);
@@ -492,7 +492,7 @@ exports.createPaymentType = async (req, res, next) => {
     // Send email notifications to all members in the background
     sendPaymentTypeNotifications(paymentType, organizationId, organizationName, false)
       .then(result => {
-              })
+      })
       .catch(error => {
         console.error('❌ Background email notification failed:', error);
       });
@@ -615,6 +615,30 @@ exports.generateRecurringPayments = async (req, res, next) => {
 exports.updatePaymentType = async (req, res, next) => {
   try {
     const organizationId = getOrgId(req);
+
+    // ⭐ Check if payments exist
+    const paymentsCount = await Payment.countDocuments({
+      paymentTypeId: req.params.id,
+      organizationId,
+    });
+
+    const isOnlyDeactivating =
+      Object.keys(req.body).length === 1 &&
+      req.body.isActive === false;
+
+    const isOnlyReactivating =
+      Object.keys(req.body).length === 1 &&
+      req.body.isActive === true;
+
+    // If payments exist, only allow toggling isActive
+    if (paymentsCount > 0 && !isOnlyDeactivating && !isOnlyReactivating) {
+      return res.status(400).json({
+        success: false,
+        code: 'PAYMENT_TYPE_IN_USE',
+        message: `Cannot edit "${req.params.id}". ${paymentsCount} member payment(s) already reference this type. You can only activate/deactivate it.`,
+        paymentsCount,
+      });
+    }
 
 
     const { frequency, duration_value, duration_unit } = req.body;
