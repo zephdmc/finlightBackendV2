@@ -97,6 +97,23 @@ exports.getAllPaymentTypes = async (req, res, next) => {
       PaymentType.countDocuments(filter)
     ]);
 
+    // ⭐ Compute paymentsCount per type
+    const typeIds = paymentTypes.map(t => t._id);
+    const counts = await Payment.aggregate([
+      { $match: { paymentTypeId: { $in: typeIds } } },
+      { $group: { _id: '$paymentTypeId', count: { $sum: 1 } } },
+    ]);
+
+    const countMap = counts.reduce((acc, item) => {
+      acc[item._id.toString()] = item.count;
+      return acc;
+    }, {});
+
+    const enriched = paymentTypes.map(t => ({
+      ...t.toObject(),
+      paymentsCount: countMap[t._id.toString()] || 0,
+    }));
+
     res.status(200).json({
       success: true,
       data: {
