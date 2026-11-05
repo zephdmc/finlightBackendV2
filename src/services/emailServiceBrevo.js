@@ -393,9 +393,10 @@ const sendPaymentTypeNotificationEmail = async (email, name, paymentType, organi
 };
 
 module.exports = {
+  sendEmailViaBrevo,
   sendPasswordResetEmail,
   sendOrganizationWelcomeEmail,
   sendMemberWelcomeEmail,
-  sendPaymentTypeNotificationEmail  // Add this line
-
+  sendPaymentTypeNotificationEmail,
+  sendDeleteVerificationEmail,
 };

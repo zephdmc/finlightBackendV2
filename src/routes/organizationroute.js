@@ -284,9 +284,19 @@ router.patch(
   organizationController.updateOrganizationStatus
 );
 
-//  DELETE ACCOUNT ROUTES
-router.post('/request-delete-code', protect, adminLimiter, organizationController.requestDeleteCode);
-router.post('/delete-account', protect, adminLimiter, organizationController.deleteOrganization);
+// ==================== DELETE ACCOUNT ROUTES ====================
+
+// Request email verification code before deleting an organization
+router.post(
+  '/request-delete-code',
+  organizationController.requestDeleteCode
+);
+
+// Verify code and delete the organization
+router.post(
+  '/delete-account',
+  organizationController.deleteOrganizationWithVerification
+);
 
 // Get organization statistics summary
 router.get(
