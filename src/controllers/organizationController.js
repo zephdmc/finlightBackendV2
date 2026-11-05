@@ -1091,67 +1091,110 @@ class OrganizationController {
   // ============================================================
   async requestDeleteCode(req, res) {
     try {
-      const userId = req.user._id; // from auth middleware
+      const userId = req.user._id;
 
-      // Find the admin user and their organization
-      const admin = await User.findById(userId).populate('organization');
+      // Find admin and populate the correct organization reference
+      const admin = await User.findById(userId)
+        .populate('organizationId');
+
       if (!admin) {
-        return res.status(404).json({ success: false, message: 'User not found' });
+        return res.status(404).json({
+          success: false,
+          message: 'User not found'
+        });
       }
 
-      if (admin.role !== 'admin' && admin.role !== 'super-admin') {
-        return res.status(403).json({ success: false, message: 'Only admins can delete an organization' });
+      if (!['admin', 'super-admin', 'super_admin'].includes(admin.role)) {
+        return res.status(403).json({
+          success: false,
+          message: 'Only admins can delete an organization'
+        });
       }
 
-      const org = admin.organization;
+      const org = admin.organizationId;
+
       if (!org) {
-        return res.status(404).json({ success: false, message: 'No organization linked to this account' });
+        return res.status(404).json({
+          success: false,
+          message: 'No organization linked to this account'
+        });
       }
 
-      // Generate a 6-digit code
+      // Generate a 6-digit verification code
       const code = Math.floor(100000 + Math.random() * 900000).toString();
-      const expiry = Date.now() + 10 * 60 * 1000; // 10 minutes
+      const expiry = Date.now() + 10 * 60 * 1000;
 
-      // Store the code (keyed by organization id)
+      // Store code using organization ID
       deleteCodeStore.set(org._id.toString(), {
         code,
         expiry,
         requestedBy: userId.toString(),
       });
 
-      // Send email to organization email (or admin email)
-      const emailTo = org.email || admin.email;
+      // Organization schema currently has no email field.
+      // Use admin email until an organization email field is added.
+      const emailTo = admin.email;
+
+      if (!emailTo) {
+        return res.status(400).json({
+          success: false,
+          message: 'No email address available for verification'
+        });
+      }
+
       const emailSent = await sendDeleteVerificationEmail({
         to: emailTo,
         subject: 'Finlight — Organization Deletion Verification Code',
         html: `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto;">
           <h2 style="color: #dc2626;">Delete Organization Request</h2>
-          <p>You requested to permanently delete your organization <strong>${org.name}</strong> from Finlight.</p>
+          <p>You requested to permanently delete your organization
+          <strong>${org.name}</strong> from Finlight.</p>
+
           <p>Use this verification code to confirm:</p>
-          <div style="font-size: 32px; font-weight: bold; letter-spacing: 6px; padding: 16px; background: #f3f4f6; border-radius: 8px; text-align: center; margin: 20px 0;">
+
+          <div style="font-size: 32px; font-weight: bold;
+          letter-spacing: 6px; padding: 16px; background: #f3f4f6;
+          border-radius: 8px; text-align: center; margin: 20px 0;">
             ${code}
           </div>
-          <p style="color: #6b7280; font-size: 14px;">This code expires in 10 minutes.</p>
-          <p style="color: #6b7280; font-size: 14px;">If you did not request this, please ignore this email and change your password immediately.</p>
+
+          <p style="color: #6b7280; font-size: 14px;">
+            This code expires in 10 minutes.
+          </p>
+
+          <p style="color: #6b7280; font-size: 14px;">
+            If you did not request this, please ignore this email
+            and change your password immediately.
+          </p>
         </div>
       `,
       });
 
       if (!emailSent) {
-        return res.status(500).json({ success: false, message: 'Failed to send verification email' });
+        deleteCodeStore.delete(org._id.toString());
+
+        return res.status(500).json({
+          success: false,
+          message: 'Failed to send verification email'
+        });
       }
 
       return res.json({
         success: true,
-        message: 'Verification code sent to organization email',
+        message: 'Verification code sent to admin email',
         email: emailTo,
       });
+
     } catch (error) {
       console.error('requestDeleteCode error:', error);
-      return res.status(500).json({ success: false, message: 'Failed to send verification code' });
+
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to send verification code'
+      });
     }
-  };
+  }
 
   // ============================================================
   // POST /api/organizations/delete-account
