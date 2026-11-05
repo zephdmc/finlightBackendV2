@@ -45,14 +45,9 @@ const startServer = async () => {
       console.error(`❌ Missing required environment variables: ${missing.join(', ')}`);
       process.exit(1);
     }
-    console.log('✅ All Flutterwave environment variables are set');
 
     const server = app.listen(PORT, '0.0.0.0', () => {
-      console.log(`🚀 Server running on port ${PORT}`);
-      console.log(`🌍 Environment: ${NODE_ENV}`);
-      console.log(`🛡️  Security Headers: Enabled`);
-      console.log(`⏱️  Rate Limiting: Enabled`);
-      console.log(`🔒 CORS: Restricted to ${process.env.FRONTEND_URL || 'http://localhost:5173'}`);
+
 
       // Log database connection status
       const dbStatus = database.getConnectionStatus();

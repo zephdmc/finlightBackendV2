@@ -788,7 +788,12 @@ const User = require('../models/User');
 const mongoose = require('mongoose');
 const Flutterwave = require('flutterwave-node-v3');
 const axios = require('axios'); // Add this
+const crypto = require('crypto');
+const { sendEmailViaBrevo,
+  sendDeleteVerificationEmail } = require('../services/emailServiceBrevo'); // your email utility
 
+
+const deleteCodeStore = new Map();
 
 // Initialize Flutterwave SDK
 const flw = new Flutterwave(process.env.FLW_PUBLIC_KEY, process.env.FLW_SECRET_KEY);
@@ -858,14 +863,14 @@ class OrganizationController {
         }
 
         if (bank) {
-                    return bank.code;
+          return bank.code;
         }
 
-                return null;
+        return null;
       }
 
       // Fallback to SDK method if API call fails
-            const sdkResponse = await flw.Bank.get_banks({ country: 'NG' });
+      const sdkResponse = await flw.Bank.get_banks({ country: 'NG' });
       // Try different SDK method names if needed
       if (!sdkResponse || sdkResponse.status !== 'success') {
         const sdkResponse2 = await flw.Bank.list({ country: 'NG' });
@@ -933,7 +938,7 @@ class OrganizationController {
         return code;
       }
 
-            return null;
+      return null;
     }
   }
 
@@ -1080,6 +1085,141 @@ class OrganizationController {
       res.status(500).json({ success: false, message: error.message });
     }
   }
+
+  // ============================================================
+  // POST /api/organizations/request-delete-code
+  // ============================================================
+  async requestDeleteCode(req, res) {
+    try {
+      const userId = req.user._id; // from auth middleware
+
+      // Find the admin user and their organization
+      const admin = await User.findById(userId).populate('organization');
+      if (!admin) {
+        return res.status(404).json({ success: false, message: 'User not found' });
+      }
+
+      if (admin.role !== 'admin' && admin.role !== 'super-admin') {
+        return res.status(403).json({ success: false, message: 'Only admins can delete an organization' });
+      }
+
+      const org = admin.organization;
+      if (!org) {
+        return res.status(404).json({ success: false, message: 'No organization linked to this account' });
+      }
+
+      // Generate a 6-digit code
+      const code = Math.floor(100000 + Math.random() * 900000).toString();
+      const expiry = Date.now() + 10 * 60 * 1000; // 10 minutes
+
+      // Store the code (keyed by organization id)
+      deleteCodeStore.set(org._id.toString(), {
+        code,
+        expiry,
+        requestedBy: userId.toString(),
+      });
+
+      // Send email to organization email (or admin email)
+      const emailTo = org.email || admin.email;
+      const emailSent = await sendDeleteVerificationEmail({
+        to: emailTo,
+        subject: 'Finlight — Organization Deletion Verification Code',
+        html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto;">
+          <h2 style="color: #dc2626;">Delete Organization Request</h2>
+          <p>You requested to permanently delete your organization <strong>${org.name}</strong> from Finlight.</p>
+          <p>Use this verification code to confirm:</p>
+          <div style="font-size: 32px; font-weight: bold; letter-spacing: 6px; padding: 16px; background: #f3f4f6; border-radius: 8px; text-align: center; margin: 20px 0;">
+            ${code}
+          </div>
+          <p style="color: #6b7280; font-size: 14px;">This code expires in 10 minutes.</p>
+          <p style="color: #6b7280; font-size: 14px;">If you did not request this, please ignore this email and change your password immediately.</p>
+        </div>
+      `,
+      });
+
+      if (!emailSent) {
+        return res.status(500).json({ success: false, message: 'Failed to send verification email' });
+      }
+
+      return res.json({
+        success: true,
+        message: 'Verification code sent to organization email',
+        email: emailTo,
+      });
+    } catch (error) {
+      console.error('requestDeleteCode error:', error);
+      return res.status(500).json({ success: false, message: 'Failed to send verification code' });
+    }
+  };
+
+  // ============================================================
+  // POST /api/organizations/delete-account
+  // ============================================================
+  async deleteOrganization(req, res) {
+    try {
+      const userId = req.user._id;
+      const { code, reason } = req.body;
+
+      if (!code || !reason || reason.trim().length < 3) {
+        return res.status(400).json({ success: false, message: 'Code and reason are required' });
+      }
+
+      // Find admin + organization
+      const admin = await User.findById(userId).populate('organization');
+      if (!admin || !admin.organization) {
+        return res.status(404).json({ success: false, message: 'Organization not found' });
+      }
+
+      if (admin.role !== 'admin' && admin.role !== 'super-admin') {
+        return res.status(403).json({ success: false, message: 'Only admins can delete an organization' });
+      }
+
+      const org = admin.organization;
+      const orgId = org._id.toString();
+
+      // Validate code
+      const stored = deleteCodeStore.get(orgId);
+      if (!stored) {
+        return res.status(400).json({ success: false, message: 'No deletion request found. Please request a new code.' });
+      }
+      if (Date.now() > stored.expiry) {
+        deleteCodeStore.delete(orgId);
+        return res.status(400).json({ success: false, message: 'Code expired. Please request a new one.' });
+      }
+      if (stored.code !== code.trim()) {
+        return res.status(400).json({ success: false, message: 'Invalid verification code' });
+      }
+
+      // ============ EXECUTE DELETION ============
+
+      // 1. Archive/keep transaction history — do NOT delete payments/transactions
+      //    (We leave Payment, Transaction, PaymentType collections intact)
+      //    Optional: tag transactions with a deleted org flag
+      // await Transaction.updateMany({ organization: org._id }, { $set: { organizationDeleted: true } });
+
+      // 2. Delete all member users tied to this org (keep admin? No — delete all profiles)
+      await User.deleteMany({ organization: org._id });
+
+      // 3. Delete the organization itself
+      await Organization.findByIdAndDelete(org._id);
+
+      // 4. Clear code
+      deleteCodeStore.delete(orgId);
+
+      // 5. Optionally log the deletion reason for audit
+      console.log(`[AUDIT] Organization ${orgId} deleted. Reason: ${reason}. By: ${userId}`);
+
+      return res.json({
+        success: true,
+        message: 'Organization and member profiles deleted. Transaction history retained for legal compliance.',
+      });
+    } catch (error) {
+      console.error('deleteOrganization error:', error);
+      return res.status(500).json({ success: false, message: 'Deletion failed. Please try again.' });
+    }
+  };
+
 
   /**
    * Delete organization (Super Admin)
@@ -1313,7 +1453,7 @@ class OrganizationController {
           lastError = subaccountResult.error;
           createRetries--;
           if (createRetries > 0) {
-                        await new Promise(resolve => setTimeout(resolve, 2000));
+            await new Promise(resolve => setTimeout(resolve, 2000));
           }
         }
       }

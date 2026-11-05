@@ -60,6 +60,62 @@ const sendEmailViaBrevo = async (to, name, subject, htmlContent) => {
   }
 };
 
+
+
+/**
+ * Send organization deletion verification code
+ */
+const sendDeleteVerificationEmail = async (email, adminName, organizationName, code) => {
+  const htmlContent = `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <title>Delete Organization Verification</title>
+      <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; background: #f6f7fb; margin: 0; padding: 20px; }
+        .container { max-width: 600px; margin: 0 auto; background: white; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        .header { background: #dc2626; color: white; padding: 30px; text-align: center; }
+        .header h1 { margin: 0; font-size: 22px; }
+        .content { padding: 30px; }
+        .code-box { font-size: 36px; font-weight: bold; letter-spacing: 8px; padding: 20px; background: #f3f4f6; border-radius: 12px; text-align: center; margin: 25px 0; color: #111827; border: 2px dashed #dc2626; }
+        .warning { background: #fef2f2; padding: 15px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #dc2626; font-size: 14px; }
+        .footer { text-align: center; padding: 20px; font-size: 12px; color: #9ca3af; border-top: 1px solid #e5e7eb; }
+      </style>
+    </head>
+    <body>
+      <div class="container">
+        <div class="header">
+          <h1>⚠️ Delete Organization Request</h1>
+        </div>
+        <div class="content">
+          <p>Hello <strong>${adminName || 'Administrator'}</strong>,</p>
+          <p>You (or someone with admin access) requested to <strong>permanently delete</strong> the organization <strong>${organizationName}</strong> from FinLight.</p>
+          <p>Use this verification code to confirm the deletion:</p>
+          <div class="code-box">${code}</div>
+          <p style="color: #6b7280; font-size: 14px; text-align: center;">This code expires in <strong>10 minutes</strong>.</p>
+          <div class="warning">
+            <strong>⚠️ What will be deleted:</strong> Organization profile, all member profiles (names, emails, IDs, phone numbers), and login credentials.
+            <br><br>
+            <strong>✅ What will be kept:</strong> Transaction history and financial records (for legal compliance).
+          </div>
+          <p style="font-size: 14px; color: #6b7280;">If you did not request this, <strong>ignore this email immediately</strong> and change your admin password.</p>
+        </div>
+        <div class="footer">
+          <p>© ${new Date().getFullYear()} FinLight. All rights reserved.</p>
+        </div>
+      </div>
+    </body>
+    </html>
+  `;
+
+  return await sendEmailViaBrevo(
+    email,
+    adminName,
+    'Delete Organization — Verification Code - FinLight',
+    htmlContent
+  );
+};
 /**
  * Send password reset email
  */

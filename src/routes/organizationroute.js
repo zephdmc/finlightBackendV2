@@ -247,8 +247,8 @@ router.put(
 );
 
 // Get Flutterwave subaccount status
-router.get('/subaccount/status', 
-  roleCheck('admin'), 
+router.get('/subaccount/status',
+  roleCheck('admin'),
   organizationController.getSubaccountStatus
 );
 
@@ -283,6 +283,10 @@ router.patch(
   ValidationMiddleware.validate,
   organizationController.updateOrganizationStatus
 );
+
+//  DELETE ACCOUNT ROUTES
+router.post('/request-delete-code', protect, adminLimiter, organizationController.requestDeleteCode);
+router.post('/delete-account', protect, adminLimiter, organizationController.deleteOrganization);
 
 // Get organization statistics summary
 router.get(
