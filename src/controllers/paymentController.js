@@ -342,33 +342,36 @@ const handlePartialPayment = async (originalPayment, amountPaid, reference, note
 // Simulates a successful payment verification for Google Play review.
 // WARNING: Only works when MOCK_PAYMENT_ENABLED=true in env.
 // ============================================================
+
 exports.mockVerifyPayment = async (req, res) => {
     try {
-        // Safety gate — only allowed when explicitly enabled
         if (process.env.MOCK_PAYMENT_ENABLED !== 'true') {
             return res.status(403).json({
                 success: false,
-                message: 'Mock verification is not enabled on this server now'
+                message: 'Mock verification is not enabled on this server'
             });
         }
 
         const { tx_ref } = req.body;
-
         if (!tx_ref) {
             return res.status(400).json({ success: false, message: 'tx_ref is required' });
         }
 
-        // Find the pending payment by transactionReference
-        // Try several fields in case your schema uses a different name
-        const Payment = require('../models/Payment'); // adjust path if needed
+        const Payment = require('../models/Payment');
 
-        const payment = await Payment.findOne({
-            $or: [
-                { transactionReference: tx_ref },
-                { txRef: tx_ref },
-                { reference: tx_ref }
-            ]
-        });
+        // ✅ Build search conditions — includes _id fallback
+        const conditions = [
+            { transactionReference: tx_ref },
+            { txRef: tx_ref },
+            { reference: tx_ref }
+        ];
+
+        // If tx_ref looks like a Mongo ObjectId, include _id in the search
+        if (/^[a-f\d]{24}$/i.test(tx_ref)) {
+            conditions.push({ _id: tx_ref });
+        }
+
+        const payment = await Payment.findOne({ $or: conditions });
 
         if (!payment) {
             return res.status(404).json({
@@ -377,7 +380,7 @@ exports.mockVerifyPayment = async (req, res) => {
             });
         }
 
-        // If already paid, no-op but return success
+        // Idempotent — if already paid, return success
         if (payment.status === 'paid') {
             return res.json({
                 success: true,
@@ -395,20 +398,16 @@ exports.mockVerifyPayment = async (req, res) => {
         payment.status = 'paid';
         payment.paidAt = new Date();
         payment.paidAmount = payment.amount;
-        payment.transactionReference = payment.transactionReference || tx_ref;
+        if (!payment.transactionReference) {
+            payment.transactionReference = tx_ref;
+        }
 
-        // If you track who paid / partial payments, mirror the real verify logic here
         if (typeof payment.remainingAmount === 'number' && payment.remainingAmount > 0) {
             payment.remainingAmount = 0;
             payment.isPartial = false;
         }
 
         await payment.save();
-
-        // Update any linked payment type / member stats if your real flow does this
-        // Example (uncomment and adapt to your code):
-        // await PaymentType.findByIdAndUpdate(payment.paymentTypeId, { $inc: { paidCount: 1 } });
-        // await User.findByIdAndUpdate(payment.userId, { $inc: { totalPaid: payment.amount } });
 
         return res.json({
             success: true,
@@ -429,8 +428,6 @@ exports.mockVerifyPayment = async (req, res) => {
         });
     }
 };
-
-
 
 // ==================== CONTROLLER METHODS ====================
 
