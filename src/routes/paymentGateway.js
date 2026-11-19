@@ -11,6 +11,10 @@ const Organization = require('../models/Organization');
 const { body, param } = require('express-validator');
 const Flutterwave = require('flutterwave-node-v3');
 
+const {
+    mockVerifyPayment  // ← ADD
+} = require('../controllers/paymentController');
+
 // ==================== ENVIRONMENT VARIABLES ====================
 const FLW_SECRET_KEY = process.env.FLW_SECRET_KEY;
 const FLW_PUBLIC_KEY = process.env.FLW_PUBLIC_KEY;
@@ -30,7 +34,7 @@ let flw;
 
 try {
     flw = new Flutterwave(FLW_PUBLIC_KEY, FLW_SECRET_KEY);
-        } catch (error) {
+} catch (error) {
     console.error('❌ Flutterwave SDK initialization error:', error.message);
     console.error('   Public Key present:', !!FLW_PUBLIC_KEY);
     console.error('   Secret Key present:', !!FLW_SECRET_KEY);
@@ -38,7 +42,7 @@ try {
     flw = {
         Payment: {
             initiate: async (payload) => {
-                                const response = await axios.post(
+                const response = await axios.post(
                     'https://api.flutterwave.com/v3/payments',
                     payload,
                     {
@@ -53,7 +57,7 @@ try {
         },
         Transaction: {
             verify: async ({ id }) => {
-                                const response = await axios.get(
+                const response = await axios.get(
                     `https://api.flutterwave.com/v3/transactions/${id}/verify`,
                     {
                         headers: {
@@ -66,7 +70,7 @@ try {
         },
         Subaccount: {
             create: async (payload) => {
-                                const response = await axios.post(
+                const response = await axios.post(
                     'https://api.flutterwave.com/v3/subaccounts',
                     payload,
                     {
@@ -81,7 +85,7 @@ try {
         },
         Misc: {
             verify_Account: async ({ account_number, account_bank }) => {
-                                try {
+                try {
                     const response = await axios.post(
                         'https://api.flutterwave.com/v3/accounts/resolve',
                         {
@@ -204,7 +208,7 @@ const withRetry = async (fn, maxRetries = 3, baseDelay = 1000) => {
             if (!isRetryable || attempt === maxRetries - 1) throw error;
 
             const delay = baseDelay * Math.pow(2, attempt);
-                        await new Promise(resolve => setTimeout(resolve, delay));
+            await new Promise(resolve => setTimeout(resolve, delay));
         }
     }
     throw lastError;
@@ -303,7 +307,7 @@ const calculateNetToOrganization = (amountPaid, targetOrgAmount = null) => {
 
     if (targetOrgAmount && Math.abs(roundedNet - targetOrgAmount) > 1) {
         roundedNet = targetOrgAmount;
-            }
+    }
 
     if (roundedNet < 0) roundedNet = 0;
 
@@ -315,6 +319,12 @@ const calculateNetToOrganization = (amountPaid, targetOrgAmount = null) => {
         totalFees: roundedTotalFees
     };
 };
+
+
+
+
+// ✅ NEW ROUTE
+router.post('/mock-verify', protect, mockVerifyPayment);
 
 // ============================================================
 // HYBRID DUES HELPER: Mark months as paid
@@ -447,7 +457,7 @@ const processPartialPayment = async (originalPayment, amountPaid, reference, isM
     );
 
     if (existingPartial) {
-                return {
+        return {
             amountPaid,
             netToOrg: existingPartial.netToOrg,
             remainingTarget: originalPayment.remainingAmount,
@@ -537,7 +547,7 @@ const processPartialPayment = async (originalPayment, amountPaid, reference, isM
                 createdBy: originalPayment.user?._id
             });
         }
-            }
+    }
 
 
     return {
@@ -610,9 +620,9 @@ router.post('/initialize', protect, paymentInitLimiter, validatePaymentInit, asy
         let memberPayAmount;
         if (customAmount && customAmount > 0) {
             memberPayAmount = customAmount;
-                    } else {
+        } else {
             memberPayAmount = calculateMemberPayAmount(targetOrgAmount);
-                    }
+        }
 
         if (!validateAmount(memberPayAmount)) {
             return res.status(400).json({ success: false, message: 'Invalid payment amount calculation' });
@@ -624,7 +634,7 @@ router.post('/initialize', protect, paymentInitLimiter, validatePaymentInit, asy
             organization = await Organization.findById(payment.user.organizationId);
             if (organization?.flutterwave?.subaccountCode) {
                 organizationSubaccountId = organization.flutterwave.subaccountCode;
-                            } else {
+            } else {
             }
         }
 
@@ -683,7 +693,7 @@ router.post('/initialize', protect, paymentInitLimiter, validatePaymentInit, asy
         };
 
 
-                const response = await withRetry(async () => {
+        const response = await withRetry(async () => {
             const axiosResponse = await axios.post(
                 'https://api.flutterwave.com/v3/payments',
                 payload,
@@ -695,7 +705,7 @@ router.post('/initialize', protect, paymentInitLimiter, validatePaymentInit, asy
                     timeout: 30000
                 }
             );
-                        return axiosResponse.data;
+            return axiosResponse.data;
         });
 
         if (response.status === 'success') {
@@ -706,8 +716,8 @@ router.post('/initialize', protect, paymentInitLimiter, validatePaymentInit, asy
 
             if (txRef && txRef !== payment.transactionReference) {
                 payment.transactionReference = txRef;
-                            } else {
-                            }
+            } else {
+            }
 
             const fullAmount = calculateMemberPayAmount(targetOrgAmount);
             payment.paymentUrl = link;
@@ -753,7 +763,7 @@ router.get('/verify/:reference', verifyLimiter, validatePaymentVerification, asy
     const { reference } = req.params;
 
     if (verificationInProgress.has(reference)) {
-                await verificationInProgress.get(reference);
+        await verificationInProgress.get(reference);
         const payment = await Payment.findOne({ transactionReference: reference });
         if (payment && payment.status === 'paid') {
             return res.status(200).json({
@@ -782,7 +792,7 @@ router.get('/verify/:reference', verifyLimiter, validatePaymentVerification, asy
             if (match && match[1]) {
                 payment = await Payment.findById(match[1]).populate('user', 'name email organizationId');
                 if (payment) {
-                                    }
+                }
             }
         }
 
@@ -794,7 +804,7 @@ router.get('/verify/:reference', verifyLimiter, validatePaymentVerification, asy
 
 
         if (payment.status === 'paid') {
-                        verificationInProgress.delete(reference);
+            verificationInProgress.delete(reference);
             resolveVerification();
             return res.status(200).json({
                 success: true,
@@ -820,7 +830,7 @@ router.get('/verify/:reference', verifyLimiter, validatePaymentVerification, asy
                     'Content-Type': 'application/json'
                 }
             });
-                        return axiosResponse.data;
+            return axiosResponse.data;
         });
 
 
@@ -884,7 +894,7 @@ router.get('/verify/:reference', verifyLimiter, validatePaymentVerification, asy
                         { new: true }
                     );
 
-                                                            result = { remainingTarget: 0 };
+                    result = { remainingTarget: 0 };
                     payment = updatedPayment;
 
                 } else {
@@ -926,7 +936,7 @@ router.get('/verify/:reference', verifyLimiter, validatePaymentVerification, asy
             else if (isPartialPayment) {
                 // Existing partial payment logic for non-dues
                 result = await processPartialPayment(payment, amountPaid, reference, false);
-                            } else {
+            } else {
                 // Existing full payment logic for non-dues
                 const updatedPayment = await Payment.findOneAndUpdate(
                     { _id: payment._id },
@@ -945,7 +955,7 @@ router.get('/verify/:reference', verifyLimiter, validatePaymentVerification, asy
                     },
                     { new: true }
                 );
-                                                result = { remainingTarget: 0 };
+                result = { remainingTarget: 0 };
                 payment = updatedPayment;
             }
 
@@ -1052,7 +1062,7 @@ router.post('/webhook', webhookLimiter, async (req, res) => {
     try {
         const signature = req.headers['verif-hash'];
         if (!signature || signature !== FLW_WEBHOOK_SECRET) {
-                        return res.status(401).json({ success: false });
+            return res.status(401).json({ success: false });
         }
 
         const event = req.body;
@@ -1064,7 +1074,7 @@ router.post('/webhook', webhookLimiter, async (req, res) => {
                 status: 'paid'
             });
             if (existingPayment) {
-                                return res.status(200).json({ success: true });
+                return res.status(200).json({ success: true });
             }
             const amountPaid = amount;
 
@@ -1130,9 +1140,9 @@ router.post('/webhook', webhookLimiter, async (req, res) => {
                                 }
                             }
                         );
-                                            }
+                    }
                 }
-                            }
+            }
         }
         res.status(200).json({ success: true });
     } catch (error) {
@@ -1248,7 +1258,7 @@ router.get('/test-route', (req, res) => {
 });
 
 router.all('/webhook-test', (req, res) => {
-        res.json({
+    res.json({
         success: true,
         message: 'Test webhook endpoint works!',
         method: req.method
@@ -1278,7 +1288,7 @@ router.post('/organizations/resolve-account', protect, async (req, res) => {
         const cleanBankCode = String(bankCode).trim();
 
         try {
-                        const response = await flw.Misc.verify_Account({
+            const response = await flw.Misc.verify_Account({
                 account_number: accountNumber,
                 account_bank: cleanBankCode
             });
@@ -1290,7 +1300,7 @@ router.post('/organizations/resolve-account', protect, async (req, res) => {
                 });
             }
         } catch (sdkError) {
-                    }
+        }
 
         const numericBankCode = parseInt(cleanBankCode, 10);
 

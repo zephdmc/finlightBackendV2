@@ -335,6 +335,103 @@ const handlePartialPayment = async (originalPayment, amountPaid, reference, note
     };
 };
 
+
+
+// ============================================================
+// POST /api/payment-gateway/mock-verify
+// Simulates a successful payment verification for Google Play review.
+// WARNING: Only works when MOCK_PAYMENT_ENABLED=true in env.
+// ============================================================
+exports.mockVerifyPayment = async (req, res) => {
+    try {
+        // Safety gate — only allowed when explicitly enabled
+        if (process.env.MOCK_PAYMENT_ENABLED !== 'true') {
+            return res.status(403).json({
+                success: false,
+                message: 'Mock verification is not enabled on this server'
+            });
+        }
+
+        const { tx_ref } = req.body;
+
+        if (!tx_ref) {
+            return res.status(400).json({ success: false, message: 'tx_ref is required' });
+        }
+
+        // Find the pending payment by transactionReference
+        // Try several fields in case your schema uses a different name
+        const Payment = require('../models/Payment'); // adjust path if needed
+
+        const payment = await Payment.findOne({
+            $or: [
+                { transactionReference: tx_ref },
+                { txRef: tx_ref },
+                { reference: tx_ref }
+            ]
+        });
+
+        if (!payment) {
+            return res.status(404).json({
+                success: false,
+                message: 'Payment not found for this transaction reference'
+            });
+        }
+
+        // If already paid, no-op but return success
+        if (payment.status === 'paid') {
+            return res.json({
+                success: true,
+                message: 'Payment already marked as paid',
+                data: {
+                    paymentId: payment._id,
+                    status: 'paid',
+                    amount: payment.amount,
+                    transactionReference: payment.transactionReference || tx_ref
+                }
+            });
+        }
+
+        // Mark as paid
+        payment.status = 'paid';
+        payment.paidAt = new Date();
+        payment.paidAmount = payment.amount;
+        payment.transactionReference = payment.transactionReference || tx_ref;
+
+        // If you track who paid / partial payments, mirror the real verify logic here
+        if (typeof payment.remainingAmount === 'number' && payment.remainingAmount > 0) {
+            payment.remainingAmount = 0;
+            payment.isPartial = false;
+        }
+
+        await payment.save();
+
+        // Update any linked payment type / member stats if your real flow does this
+        // Example (uncomment and adapt to your code):
+        // await PaymentType.findByIdAndUpdate(payment.paymentTypeId, { $inc: { paidCount: 1 } });
+        // await User.findByIdAndUpdate(payment.userId, { $inc: { totalPaid: payment.amount } });
+
+        return res.json({
+            success: true,
+            message: 'Mock payment verified successfully',
+            data: {
+                paymentId: payment._id,
+                status: 'paid',
+                amount: payment.amount,
+                paidAt: payment.paidAt,
+                transactionReference: payment.transactionReference
+            }
+        });
+    } catch (error) {
+        console.error('mockVerifyPayment error:', error);
+        return res.status(500).json({
+            success: false,
+            message: error.message || 'Mock verification failed'
+        });
+    }
+};
+
+
+
 // ==================== CONTROLLER METHODS ====================
 
 // @desc    Create direct payment (Admin only - manual, no gateway)
