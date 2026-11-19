@@ -640,6 +640,63 @@ exports.createPayment = async (req, res, next) => {
             return res.status(403).json({ success: false, message: 'User not found in your organization' });
         }
 
+        // ============================================================
+        // ⭐ NEW: If this is a fine payment, UPDATE the existing doc
+        // ============================================================
+        if (paymentId) {
+            const existingFine = await Payment.findOne({
+                _id: paymentId,
+                user: userId,
+                organizationId
+            });
+
+            if (!existingFine) {
+                return res.status(404).json({
+                    success: false,
+                    message: 'Fine not found'
+                });
+            }
+
+            // 🔒 Guard against double payment
+            if (existingFine.status === 'paid') {
+                return res.status(400).json({
+                    success: false,
+                    message: 'This fine has already been paid'
+                });
+            }
+
+            // ⭐ Only treat as fine-update if it really is a fine
+            if (existingFine.type === 'fine' || existingFine.type === 'fines') {
+                // Attach the intended amount so the gateway uses the right value
+                const amountToPay = customAmount || existingFine.amount;
+
+                // Update status → pending (gateway will flip to 'paid' on verify)
+                existingFine.status = 'pending';
+                existingFine.paidAmount = amountToPay;
+                existingFine.amount = amountToPay;
+                existingFine.targetOrgAmount = amountToPay;
+                existingFine.expectedAmount = Math.ceil(amountToPay / 0.96);
+                existingFine.transactionReference =
+                    `PAY-${existingFine._id}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+                existingFine.metadata = {
+                    ...(existingFine.metadata || {}),
+                    pendingPaymentInitiatedAt: new Date()
+                };
+                await existingFine.save();
+
+                return res.status(200).json({
+                    success: true,
+                    data: existingFine,
+                    message: 'Fine payment initialized — proceed to gateway',
+                    isUpdate: true,
+                    isFine: true
+                });
+            }
+        }
+
+
+
+
         let periodData = {};
         if (paymentTypeId) {
             const paymentType = await PaymentType.findById(paymentTypeId);
