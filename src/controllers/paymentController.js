@@ -348,7 +348,7 @@ exports.mockVerifyPayment = async (req, res) => {
         if (process.env.MOCK_PAYMENT_ENABLED !== 'true') {
             return res.status(403).json({
                 success: false,
-                message: 'Mock verification is not enabled on this server'
+                message: 'Mock verification is not enabled on this server now'
             });
         }
 
