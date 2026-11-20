@@ -804,14 +804,13 @@ exports.createPayment = async (req, res, next) => {
             name,
             type,
             amount,
-            dueDate,
             description,
             paymentTypeId,
+            paymentId, // ADD THIS
             periodStart,
             periodEnd,
             periodKey,
-            paymentId,
-            customAmount } = req.body;
+        } = req.body;
         const organizationId = req.user.organizationId;
 
 
@@ -848,6 +847,13 @@ exports.createPayment = async (req, res, next) => {
                 });
             }
 
+            if (!['fine', 'fines'].includes(existingFine.type)) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'The selected payment record is not a fine.'
+                });
+            }
+
             // 🔒 Guard against double payment
             if (existingFine.status === 'paid') {
                 return res.status(400).json({
@@ -855,7 +861,20 @@ exports.createPayment = async (req, res, next) => {
                     message: 'This fine has already been paid'
                 });
             }
-
+            if (!['unpaid', 'pending'].includes(existingFine.status)) {
+                return res.status(400).json({
+                    success: false,
+                    message: `This fine cannot be paid with status: ${existingFine.status}`
+                });
+            }
+            const fineAmount = Number(existingFine.targetOrgAmount || existingFine.amount);
+            if (Number(amount) !== fineAmount) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'The payment amount does not match the original fine.',
+                    expectedAmount: fineAmount
+                });
+            }
             // ⭐ Only treat as fine-update if it really is a fine
             if (existingFine.type === 'fine' || existingFine.type === 'fines') {
                 // Attach the intended amount so the gateway uses the right value
