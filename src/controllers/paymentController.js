@@ -806,7 +806,9 @@ exports.createPayment = async (req, res, next) => {
             amount,
             description,
             paymentTypeId,
-            paymentId, // ADD THIS
+            paymentId,
+            customAmount,
+            dueDate,
             periodStart,
             periodEnd,
             periodKey,
@@ -828,12 +830,12 @@ exports.createPayment = async (req, res, next) => {
         // ============================================================
         // if (paymentId) {
         if (type === 'fine' || type === 'fines') {
-            if (!paymentId) {
-                return res.status(400).json({
-                    success: false,
-                    message: 'Fine payment requires the original fine payment ID.'
-                });
-            }
+            // if (!paymentId) {
+            //     return res.status(400).json({
+            //         success: false,
+            //         message: 'Fine payment requires the original fine payment ID.'
+            //     });
+            // }
             const existingFine = await Payment.findOne({
                 _id: paymentId,
                 user: userId,
@@ -878,7 +880,7 @@ exports.createPayment = async (req, res, next) => {
             // ⭐ Only treat as fine-update if it really is a fine
             if (existingFine.type === 'fine' || existingFine.type === 'fines') {
                 // Attach the intended amount so the gateway uses the right value
-                const amountToPay = customAmount || existingFine.amount;
+                const amountToPay = Number(amount);
 
                 // Update status → pending (gateway will flip to 'paid' on verify)
                 existingFine.status = 'pending';
