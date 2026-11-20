@@ -343,8 +343,103 @@ const handlePartialPayment = async (originalPayment, amountPaid, reference, note
 // WARNING: Only works when MOCK_PAYMENT_ENABLED=true in env.
 // ============================================================
 
+// exports.mockVerifyPayment = async (req, res) => {
+//     try {
+//         if (process.env.MOCK_PAYMENT_ENABLED !== 'true') {
+//             return res.status(403).json({
+//                 success: false,
+//                 message: 'Mock verification is not enabled on this server'
+//             });
+//         }
+
+//         const { tx_ref } = req.body;
+//         if (!tx_ref) {
+//             return res.status(400).json({ success: false, message: 'tx_ref is required' });
+//         }
+
+//         const Payment = require('../models/Payment');
+
+//         // ✅ Build search conditions — includes _id fallback
+//         const conditions = [
+//             { transactionReference: tx_ref },
+//             { txRef: tx_ref },
+//             { reference: tx_ref }
+//         ];
+
+//         // If tx_ref looks like a Mongo ObjectId, include _id in the search
+//         if (/^[a-f\d]{24}$/i.test(tx_ref)) {
+//             conditions.push({ _id: tx_ref });
+//         }
+
+//         const payment = await Payment.findOne({ $or: conditions });
+
+//         if (!payment) {
+//             return res.status(404).json({
+//                 success: false,
+//                 message: 'Payment not found for this transaction reference'
+//             });
+//         }
+
+//         // Idempotent — if already paid, return success
+//         if (payment.status === 'paid') {
+//             return res.json({
+//                 success: true,
+//                 message: 'Payment already marked as paid',
+//                 data: {
+//                     paymentId: payment._id,
+//                     status: 'paid',
+//                     amount: payment.amount,
+//                     transactionReference: payment.transactionReference || tx_ref
+//                 }
+//             });
+//         }
+
+//         // Mark as paid
+//         payment.status = 'paid';
+//         payment.paidAt = new Date();
+//         payment.paidAmount = payment.amount;
+//         if (!payment.transactionReference) {
+//             payment.transactionReference = tx_ref;
+//         }
+
+//         if (typeof payment.remainingAmount === 'number' && payment.remainingAmount > 0) {
+//             payment.remainingAmount = 0;
+//             payment.isPartial = false;
+//         }
+
+//         await payment.save();
+
+//         return res.json({
+//             success: true,
+//             message: 'Mock payment verified successfully',
+//             data: {
+//                 paymentId: payment._id,
+//                 status: 'paid',
+//                 amount: payment.amount,
+//                 paidAt: payment.paidAt,
+//                 transactionReference: payment.transactionReference
+//             }
+//         });
+//     } catch (error) {
+//         console.error('mockVerifyPayment error:', error);
+//         return res.status(500).json({
+//             success: false,
+//             message: error.message || 'Mock verification failed'
+//         });
+//     }
+// };
+
+
+// ============================================================
+// POST /api/payment-gateway/mock-verify
+// Simulates payment against an existing MongoDB payment document.
+// Only enabled when MOCK_PAYMENT_ENABLED=true.
+// Does not create a payment or a Flutterwave transaction.
+// ============================================================
+
 exports.mockVerifyPayment = async (req, res) => {
     try {
+        // 1. Ensure mock payments are explicitly enabled
         if (process.env.MOCK_PAYMENT_ENABLED !== 'true') {
             return res.status(403).json({
                 success: false,
@@ -352,76 +447,154 @@ exports.mockVerifyPayment = async (req, res) => {
             });
         }
 
+        // 2. Validate the existing MongoDB payment ID
         const { tx_ref } = req.body;
-        if (!tx_ref) {
-            return res.status(400).json({ success: false, message: 'tx_ref is required' });
+
+        if (!tx_ref || !/^[a-f\d]{24}$/i.test(tx_ref)) {
+            return res.status(400).json({
+                success: false,
+                message: 'A valid existing payment ID is required'
+            });
         }
 
         const Payment = require('../models/Payment');
+        const User = require('../models/User');
 
-        // ✅ Build search conditions — includes _id fallback
-        const conditions = [
-            { transactionReference: tx_ref },
-            { txRef: tx_ref },
-            { reference: tx_ref }
-        ];
-
-        // If tx_ref looks like a Mongo ObjectId, include _id in the search
-        if (/^[a-f\d]{24}$/i.test(tx_ref)) {
-            conditions.push({ _id: tx_ref });
-        }
-
-        const payment = await Payment.findOne({ $or: conditions });
+        // 3. Find the existing payment document
+        const payment = await Payment.findById(tx_ref);
 
         if (!payment) {
             return res.status(404).json({
                 success: false,
-                message: 'Payment not found for this transaction reference'
+                message: 'Existing payment record not found'
             });
         }
 
-        // Idempotent — if already paid, return success
+        // 4. Verify payment ownership or admin access
+        const paymentUserId = payment.user.toString();
+        const requesterId = (req.user.id || req.user._id).toString();
+
+        if (
+            paymentUserId !== requesterId &&
+            req.user.role !== 'admin'
+        ) {
+            return res.status(403).json({
+                success: false,
+                message: 'You are not authorized to verify this payment'
+            });
+        }
+
+        // 5. Handle already-paid payments without modifying them
         if (payment.status === 'paid') {
-            return res.json({
+            return res.status(200).json({
                 success: true,
                 message: 'Payment already marked as paid',
                 data: {
                     paymentId: payment._id,
-                    status: 'paid',
+                    type: payment.type,
+                    status: payment.status,
                     amount: payment.amount,
-                    transactionReference: payment.transactionReference || tx_ref
+                    paidAt: payment.paidAt,
+                    transactionReference: payment.transactionReference
                 }
             });
         }
 
-        // Mark as paid
-        payment.status = 'paid';
-        payment.paidAt = new Date();
-        payment.paidAmount = payment.amount;
-        if (!payment.transactionReference) {
-            payment.transactionReference = tx_ref;
+        // 6. Only allow full unpaid or pending payments
+        if (!['unpaid', 'pending'].includes(payment.status)) {
+            return res.status(400).json({
+                success: false,
+                message: `Mock payment is not available for status: ${payment.status}. Partial payments must be handled separately.`
+            });
         }
 
-        if (typeof payment.remainingAmount === 'number' && payment.remainingAmount > 0) {
-            payment.remainingAmount = 0;
-            payment.isPartial = false;
+        const now = new Date();
+
+        // Amount the organization should receive
+        const organizationAmount =
+            payment.targetOrgAmount > 0
+                ? payment.targetOrgAmount
+                : payment.amount;
+
+        // Amount expected from the member, including fees where applicable
+        const memberAmount =
+            payment.expectedAmount > 0
+                ? payment.expectedAmount
+                : payment.amount;
+
+        // 7. Atomically update the existing document
+        const updatedPayment = await Payment.findOneAndUpdate(
+            {
+                _id: payment._id,
+                status: payment.status
+            },
+            {
+                $set: {
+                    status: 'paid',
+                    paidAt: now,
+                    actualAmountPaid: memberAmount,
+                    totalPaidSoFar: organizationAmount,
+                    remainingAmount: 0,
+                    isPartial: false,
+                    paidMonths: payment.months || [],
+                    completedAt: now,
+                    updatedAt: now
+                }
+            },
+            {
+                new: true,
+                runValidators: true
+            }
+        );
+
+        if (!updatedPayment) {
+            const latestPayment = await Payment.findById(payment._id);
+
+            if (latestPayment?.status === 'paid') {
+                return res.status(200).json({
+                    success: true,
+                    message: 'Payment already marked as paid',
+                    data: {
+                        paymentId: latestPayment._id,
+                        type: latestPayment.type,
+                        status: latestPayment.status,
+                        amount: latestPayment.amount,
+                        paidAt: latestPayment.paidAt,
+                        transactionReference: latestPayment.transactionReference
+                    }
+                });
+            }
+
+            return res.status(409).json({
+                success: false,
+                message: 'Payment could not be updated. Please try again.'
+            });
         }
 
-        await payment.save();
+        // 8. Update registration status when applicable
+        if (updatedPayment.type === 'registration') {
+            await User.findByIdAndUpdate(updatedPayment.user, {
+                $set: { hasPaidRegistration: true }
+            });
+        }
 
-        return res.json({
+        // 9. Return payment details to the frontend
+        return res.status(200).json({
             success: true,
             message: 'Mock payment verified successfully',
             data: {
-                paymentId: payment._id,
-                status: 'paid',
-                amount: payment.amount,
-                paidAt: payment.paidAt,
-                transactionReference: payment.transactionReference
+                paymentId: updatedPayment._id,
+                type: updatedPayment.type,
+                status: updatedPayment.status,
+                amount: updatedPayment.amount,
+                paidAt: updatedPayment.paidAt,
+                transactionReference: updatedPayment.transactionReference
             }
         });
+
     } catch (error) {
         console.error('mockVerifyPayment error:', error);
+
         return res.status(500).json({
             success: false,
             message: error.message || 'Mock verification failed'
