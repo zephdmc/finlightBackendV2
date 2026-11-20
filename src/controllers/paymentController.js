@@ -829,7 +829,7 @@ exports.createPayment = async (req, res, next) => {
         // ⭐ NEW: If this is a fine payment, UPDATE the existing doc
         // ============================================================
         // if (paymentId) {
-        if (type === 'fine' || type === 'fines') {
+        if ((type === 'fine' || type === 'fines') && paymentId) {
             // if (!paymentId) {
             //     return res.status(400).json({
             //         success: false,
