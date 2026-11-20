@@ -627,7 +627,18 @@ exports.markFineAsPaid = async (req, res, next) => {
 // @access  Private/Admin
 exports.createPayment = async (req, res, next) => {
     try {
-        const { userId, name, type, amount, dueDate, description, paymentTypeId, periodStart, periodEnd, periodKey } = req.body;
+        const { userId,
+            name,
+            type,
+            amount,
+            dueDate,
+            description,
+            paymentTypeId,
+            periodStart,
+            periodEnd,
+            periodKey,
+            paymentId,
+            customAmount } = req.body;
         const organizationId = req.user.organizationId;
 
 
