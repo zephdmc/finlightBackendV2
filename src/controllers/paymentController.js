@@ -1332,7 +1332,8 @@ exports.getPendingPayments = async (req, res, next) => {
             user: userId,
             organizationId,
             status: { $in: ['unpaid', 'partial', 'pending'] },
-            remainingAmount: { $gt: 0 }
+            remainingAmount: { $gt: 0 },
+            type: { $nin: ['fine', 'fines', 'outstanding'] }   // ⭐
         });
 
         const unpaidTypeIds = unpaidPayments.map(p => p.paymentTypeId?.toString()).filter(Boolean);
